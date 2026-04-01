@@ -133,21 +133,21 @@ void send_payload(APRSHelloWorldCleanApp* app, char type);
 
 void set_nada_1200(APRSHelloWorldCleanApp* app)
 {   
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         app->output_value = true;
         furi_hal_gpio_write(app->output_pin, app->output_value);
         furi_delay_us(tc1200);
         app->output_value = false;
         furi_hal_gpio_write(app->output_pin, app->output_value);
         furi_delay_us(tc1200);
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
 
 void set_nada_2400(APRSHelloWorldCleanApp* app)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         app->output_value = true;
         furi_hal_gpio_write(app->output_pin, app->output_value);
         furi_delay_us(tc2400);
@@ -161,19 +161,19 @@ void set_nada_2400(APRSHelloWorldCleanApp* app)
         app->output_value = false;
         furi_hal_gpio_write(app->output_pin, app->output_value);
         furi_delay_us(tc2400);
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
 
 void set_nada(APRSHelloWorldCleanApp* app, bool nada)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         if(nada)
             set_nada_1200(app);
         else
             set_nada_2400(app);
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
@@ -201,20 +201,20 @@ void calc_crc(bool in_bit)
 
 void send_crc(APRSHelloWorldCleanApp* app)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         unsigned char crc_lo = crc ^ 0xff;
         unsigned char crc_hi = (crc >> 8) ^ 0xff;
 
         send_char_NRZI(app, crc_lo, 1);
         send_char_NRZI(app, crc_hi, 1);
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
 
 void send_header(APRSHelloWorldCleanApp* app)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         char temp;
 
         /*
@@ -274,14 +274,14 @@ void send_header(APRSHelloWorldCleanApp* app)
         /***** CTRL FLD & PID *****/
         send_char_NRZI(app, _CTRL_ID, 1);
         send_char_NRZI(app, _PID, 1);
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
 
 void send_payload(APRSHelloWorldCleanApp* app, char type)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         if(type == _FIXPOS)
         {
             send_char_NRZI(app, _DT_POS, 1);
@@ -308,7 +308,7 @@ void send_payload(APRSHelloWorldCleanApp* app, char type)
             send_char_NRZI(app, ' ', 1);
             send_string_len(app, mystatus, strlen(mystatus));
         }
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
@@ -324,7 +324,7 @@ void send_payload(APRSHelloWorldCleanApp* app, char type)
 
 void send_char_NRZI(APRSHelloWorldCleanApp* app, unsigned char in_byte, bool enBitStuff)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         bool bits;
         
         for(int i = 0; i < 8; i++)
@@ -356,29 +356,29 @@ void send_char_NRZI(APRSHelloWorldCleanApp* app, unsigned char in_byte, bool enB
 
             in_byte >>= 1;
         }
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
 
 void send_string_len(APRSHelloWorldCleanApp* app, const char *in_string, int len)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         for(int j=0; j<len; j++)
         {
             send_char_NRZI(app, in_string[j], 1);
         }
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
 
 void send_flag(APRSHelloWorldCleanApp* app, unsigned char flag_len)
 {
-    taskENTER_CRITICAL();
+    FURI_CRITICAL_ENTER();
         for(int j=0; j<flag_len; j++)
             send_char_NRZI(app, _FLAG, 0);
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
 }
 
 //---------------------------------------------------------------------------
@@ -394,7 +394,7 @@ void send_packet(APRSHelloWorldCleanApp* app, uint8_t packet_type)
 {
     notification_message(app->notifications, &red_led_enable);
 
-    taskENTER_CRITICAL();        
+    FURI_CRITICAL_ENTER();        
         /*
         * AX25 FRAME
         * 
@@ -421,7 +421,7 @@ void send_packet(APRSHelloWorldCleanApp* app, uint8_t packet_type)
         
         send_flag(app, 3);
         
-    taskEXIT_CRITICAL();
+    FURI_CRITICAL_EXIT();
     
     notification_message(app->notifications, &red_led_disable);
     
@@ -525,8 +525,8 @@ static void aprs_hello_world_clean_app_draw_callback(Canvas* canvas, void* ctx){
 
 //---------------------------------------------------------------------------
 
-static void timer_callback(FuriMessageQueue* event_queue) {
-    // Проверяем, что контекст не нулевой
+static void timer_callback(void* context) {
+    FuriMessageQueue* event_queue = context;
     furi_assert(event_queue);
 
     APRSHelloWorldCleanEvent event = {.type = EventTypeTick};
