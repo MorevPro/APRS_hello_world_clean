@@ -1,618 +1,525 @@
 #include "aprs_hello_world_clean_app.h"
 
+#include "aprs_ax25_encoder.h"
+
 #include <furi.h>
-#include <furi_hal.h>
-#include <gui/gui.h>
+#include <furi_hal_power.h>
+#include <furi_hal_region.h>
+#include <furi_hal_subghz.h>
 #include <gui/elements.h>
-
 #include <input/input.h>
+#include <lib/subghz/devices/cc1101_configs.h>
+#include <lib/toolbox/level_duration.h>
+#include <notification/notification_messages.h>
+#include <stdio.h>
+#include <string.h>
 
-#include <furi_hal_random.h>
+#define TAG "APRS432"
+#define APRS_FREQUENCY_HZ          432500000UL
+#define APRS_GFSK_BIT_DURATION_US  104U
+#define APRS_PREAMBLE_FLAGS        32U
+#define APRS_POSTAMBLE_FLAGS       3U
+#define APP_TICK_PERIOD_MS         200U
 
-#define _1200   1
-#define _2400   0
-
-#define _FLAG       0x7e
-#define _CTRL_ID    0x03
-#define _PID        0xf0
-#define _DT_EXP     ','
-#define _DT_STATUS  '>'
-#define _DT_POS     '!'
-
-#define _FIXPOS         1
-#define _STATUS         2
-#define _FIXPOS_STATUS  3
-
-bool nada = _2400;
-#define MAX_PAYLOAD_SIZE 128
-uint8_t message[MAX_PAYLOAD_SIZE];
-uint16_t message_size = 0;
-/*
- * SQUARE WAVE SIGNAL GENERATION
- * 
- * baud_adj lets you to adjust or fine tune overall baud rate
- * by simultaneously adjust the 1200 Hz and 2400 Hz tone,
- * so that both tone would scales synchronously.
- * adj_1200 determined the 1200 hz tone adjustment.
- * tc1200 is the half of the 1200 Hz signal periods.
- * 
- *      -------------------------                           -------
- *     |                         |                         |
- *     |                         |                         |
- *     |                         |                         |
- * ----                           -------------------------
- * 
- *     |<------ tc1200 --------->|<------ tc1200 --------->|
- *     
- * adj_2400 determined the 2400 hz tone adjustment.
- * tc2400 is the half of the 2400 Hz signal periods.
- * 
- *      ------------              ------------              -------
- *     |            |            |            |            |
- *     |            |            |            |            |            
- *     |            |            |            |            |
- * ----              ------------              ------------
- * 
- *     |<--tc2400-->|<--tc2400-->|<--tc2400-->|<--tc2400-->|
- *     
- */
-
-const float baud_adj = 0.99;
-const float adj_1200 = 1.0 * baud_adj;
-const float adj_2400 = 1.0 * baud_adj;
-unsigned int tc1200 = (unsigned int)(0.5 * adj_1200 * 1000000.0 / 1200.0);
-unsigned int tc2400 = (unsigned int)(0.5 * adj_2400 * 1000000.0 / 2400.0);
-
-//---------------------------------------------------------------------------
-
-const char *mycall = "MYCALL";
-char myssid = 1;
-
-const char *dest = "APRS";
-
-const char *digi = "WIDE2";
-char digissid = 1;
-
-const char *mystatus = "Hello World! This is my simple Flipper Zero APRS Transmitter!";
-
-const char *lat = "55.0N";
-const char *lon = "37.0E";
-const char sym_ovl = 'H';
-const char sym_tab = 'a';
-
-//---------------------------------------------------------------------------
-/*
- * This strings will be used to generate AFSK signals, over and over again.
- */
-const char strings[860]={
-"b0NWtAXLKj0Sn8WRsakzQS8JN25zAAf3md5ILaYty6jvZHrq1QU1CWfC6tKOMY7cFCopla9sn0b\
-n26zcd9qRHFWflqMcmMwx9ZDmzxrs4cfjiMox4R0pNCB0fm26gDVcdMCZcVOnovLDWUlFHL0m2UL\
-j3SVJonE4swIlemv2miVFJ3hjETh54cubpJhefhHtOGlwwtd64PigxsjzB3oXI6tJR3sCd84sheQ\
-is2DrnBZPd4pYdZvv6nx01hDeQNiUYGilAHb7cdqlEIMwhHVaqIgn43JOwQzSMGOWvAbFdSxLyoU\
-d8rYeyVWHxW3tyJS7wjWjsr1UV3RCkPBL4XhMpceV3z0zu6y9rQGWxBwVAbBliOo630lkdmwRkuM\
-B0INNcS4CjELYzsVQnEnX5OMCryDdbFEGwCpDEiFPETlP4EeqsYI6ACIRsM9A8buf1eecrwBKgkT\
-3Ty0mHlOjc4ibBiJCJB5vTzvEbQdfgsLGubfPL1Y8Vb5PAzwCGVotWxUPUPamGgBezXZ4JbOAbUf\
-XGEM1ppuRtam8zk4ePExs1ccD4qumNt0pvfEWyCiIrVuLAK1TGoOG9rE0U0wCaLILlmLiTu1UtPM\
-STm1sZzEAdunENMmMrHH4bO5W3dL36Njoq7fCVyFGiIurYBcmamYRWHFas3f6DCN7IpOiKo0PM1E\
-If7eeVegEB4lQZ5EVSXJ4HpGodk4h903bu4KIfm2VilJUUtjiy9lMqTXGliafDss5zBGpL8S7yh1\
-z2NdgD8TrRGXR4EJ9gSiJTCBiGoSe1uzoeqPNV1pMM7ld7bKbTriOlBNyTCm7lx7cM8J5IsO4ieg\
-CSjG0OzwiQEhed7hvS2b78Qu"
+static const NotificationSequence sequence_tx_start = {
+    &message_red_255,
+    NULL,
 };
 
-//---------------------------------------------------------------------------
+static const NotificationSequence sequence_tx_stop = {
+    &message_red_0,
+    NULL,
+};
 
-unsigned int tx_delay = 5000;
-unsigned int str_len = 400;
+static const NotificationSequence sequence_rx_activity = {
+    &message_blue_255,
+    &message_delay_50,
+    &message_blue_0,
+    NULL,
+};
 
-//---------------------------------------------------------------------------
+static const NotificationSequence sequence_tx_error = {
+    &message_red_255,
+    &message_delay_50,
+    &message_red_0,
+    NULL,
+};
 
-char bit_stuff = 0;
-unsigned short crc=0xffff;
+static const AprsAx25AddressConfig aprs_address = {
+    .source_call = "MYCALL",
+    .source_ssid = 1U,
+    .destination_call = "APRS",
+    .destination_ssid = 0U,
+    .path1_call = "WIDE2",
+    .path1_ssid = 1U,
+    .use_path1 = true,
+};
 
-//---------------------------------------------------------------------------
-
-/*
- * 
- */
-void set_nada_1200(APRSHelloWorldCleanApp* app);
-void set_nada_2400(APRSHelloWorldCleanApp* app);
-void set_nada(APRSHelloWorldCleanApp* app, bool nada);
-
-void calc_crc(bool in_bit);
-void send_crc(APRSHelloWorldCleanApp* app);
-
-void send_char_NRZI(APRSHelloWorldCleanApp* app, unsigned char in_byte, bool enBitStuff);
-void send_string_len(APRSHelloWorldCleanApp* app, const char *in_string, int len);
-
-void send_packet(APRSHelloWorldCleanApp* app, uint8_t packet_type);
-void send_flag(APRSHelloWorldCleanApp* app, unsigned char flag_len);
-void send_header(APRSHelloWorldCleanApp* app);
-void send_payload(APRSHelloWorldCleanApp* app, char type);
-
-//---------------------------------------------------------------------------
-
-void set_nada_1200(APRSHelloWorldCleanApp* app)
-{   
-    FURI_CRITICAL_ENTER();
-        app->output_value = true;
-        furi_hal_gpio_write(app->output_pin, app->output_value);
-        furi_delay_us(tc1200);
-        app->output_value = false;
-        furi_hal_gpio_write(app->output_pin, app->output_value);
-        furi_delay_us(tc1200);
-    FURI_CRITICAL_EXIT();
+static void aprs_set_status(APRSHelloWorldCleanApp* app, const char* text) {
+    snprintf(app->last_status, sizeof(app->last_status), "%s", text);
 }
 
-//---------------------------------------------------------------------------
+static void aprs_hex_preview(
+    const uint8_t* data,
+    size_t data_size,
+    char* out,
+    size_t out_size,
+    size_t max_bytes) {
+    if(!out || (out_size == 0U)) {
+        return;
+    }
 
-void set_nada_2400(APRSHelloWorldCleanApp* app)
-{
-    FURI_CRITICAL_ENTER();
-        app->output_value = true;
-        furi_hal_gpio_write(app->output_pin, app->output_value);
-        furi_delay_us(tc2400);
-        app->output_value = false;
-        furi_hal_gpio_write(app->output_pin, app->output_value);
-        furi_delay_us(tc2400);
+    out[0] = '\0';
 
-        app->output_value = true;
-        furi_hal_gpio_write(app->output_pin, app->output_value);
-        furi_delay_us(tc2400);
-        app->output_value = false;
-        furi_hal_gpio_write(app->output_pin, app->output_value);
-        furi_delay_us(tc2400);
-    FURI_CRITICAL_EXIT();
-}
+    if(!data || (data_size == 0U)) {
+        return;
+    }
 
-//---------------------------------------------------------------------------
+    size_t preview_size = data_size;
+    if(preview_size > max_bytes) {
+        preview_size = max_bytes;
+    }
 
-void set_nada(APRSHelloWorldCleanApp* app, bool nada)
-{
-    FURI_CRITICAL_ENTER();
-        if(nada)
-            set_nada_1200(app);
-        else
-            set_nada_2400(app);
-    FURI_CRITICAL_EXIT();
-}
-
-//---------------------------------------------------------------------------
-
-/*
- * This function will calculate CRC-16 CCITT for the FCS (Frame Check Sequence)
- * as required for the HDLC frame validity check.
- * 
- * Using 0x1021 as polynomial generator. The CRC registers are initialized with
- * 0xFFFF
- */
-
-void calc_crc(bool in_bit)
-{
-    unsigned short xor_in;
-    
-    xor_in = crc ^ in_bit;
-    crc >>= 1;
-
-    if(xor_in & 0x01)
-        crc ^= 0x8408;
-}
-
-//---------------------------------------------------------------------------
-
-void send_crc(APRSHelloWorldCleanApp* app)
-{
-    FURI_CRITICAL_ENTER();
-        unsigned char crc_lo = crc ^ 0xff;
-        unsigned char crc_hi = (crc >> 8) ^ 0xff;
-
-        send_char_NRZI(app, crc_lo, 1);
-        send_char_NRZI(app, crc_hi, 1);
-    FURI_CRITICAL_EXIT();
-}
-
-//---------------------------------------------------------------------------
-
-void send_header(APRSHelloWorldCleanApp* app)
-{
-    FURI_CRITICAL_ENTER();
-        char temp;
-
-        /*
-        * APRS AX.25 Header 
-        * ........................................................
-        * |   DEST   |  SOURCE  |   DIGI   | CTRL FLD |    PID   |
-        * --------------------------------------------------------
-        * |  7 bytes |  7 bytes |  7 bytes |   0x03   |   0xf0   |
-        * --------------------------------------------------------
-        * 
-        * DEST   : 6 byte "callsign" + 1 byte ssid
-        * SOURCE : 6 byte your callsign + 1 byte ssid
-        * DIGI   : 6 byte "digi callsign" + 1 byte ssid
-        * 
-        * ALL DEST, SOURCE, & DIGI are left shifted 1 bit, ASCII format.
-        * DIGI ssid is left shifted 1 bit + 1
-        * 
-        * CTRL FLD is 0x03 and not shifted.
-        * PID is 0xf0 and not shifted.
-        */
-
-        /********* DEST ***********/
-        temp = strlen(dest);
-        for(int j=0; j<temp; j++)
-            send_char_NRZI(app, dest[j] << 1, 1);
-        if(temp < 6)
-        {
-            for(int j=0; j<(6 - temp); j++)
-            send_char_NRZI(app, ' ' << 1, 1);
+    size_t offset = 0U;
+    for(size_t i = 0; i < preview_size; i++) {
+        int written = snprintf(
+            out + offset, out_size - offset, "%02X%s", data[i], (i + 1U < preview_size) ? " " : "");
+        if(written < 0) {
+            break;
         }
-        send_char_NRZI(app, '0' << 1, 1);
 
-        
-        /********* SOURCE *********/
-        temp = strlen(mycall);
-        for(int j=0; j<temp; j++)
-            send_char_NRZI(app, mycall[j] << 1, 1);
-        if(temp < 6)
-        {
-            for(int j=0; j<(6 - temp); j++)
-            send_char_NRZI(app, ' ' << 1, 1);
+        size_t step = (size_t)written;
+        if(step >= (out_size - offset)) {
+            offset = out_size - 1U;
+            break;
         }
-        send_char_NRZI(app, (myssid + '0') << 1, 1);
 
+        offset += step;
+    }
 
-        /********* DIGI ***********/
-        temp = strlen(digi);
-        for(int j=0; j<temp; j++)
-            send_char_NRZI(app, digi[j] << 1, 1);
-        if(temp < 6)
-        {
-            for(int j=0; j<(6 - temp); j++)
-            send_char_NRZI(app, ' ' << 1, 1);
-        }
-        send_char_NRZI(app, ((digissid + '0') << 1) + 1, 1);
-
-        /***** CTRL FLD & PID *****/
-        send_char_NRZI(app, _CTRL_ID, 1);
-        send_char_NRZI(app, _PID, 1);
-    FURI_CRITICAL_EXIT();
+    if((preview_size < data_size) && (offset + 4U < out_size)) {
+        snprintf(out + offset, out_size - offset, " ...");
+    }
 }
 
-//---------------------------------------------------------------------------
-
-void send_payload(APRSHelloWorldCleanApp* app, char type)
-{
-    FURI_CRITICAL_ENTER();
-        if(type == _FIXPOS)
-        {
-            send_char_NRZI(app, _DT_POS, 1);
-            send_string_len(app, lat, strlen(lat));
-            send_char_NRZI(app, sym_ovl, 1);
-            send_string_len(app, lon, strlen(lon));
-            send_char_NRZI(app, sym_tab, 1);
-        }
-        else if(type == _STATUS)
-        {
-            notification_message(app->notifications, &blue_led_enable);
-
-            send_char_NRZI(app, _DT_STATUS, 1);
-            send_string_len(app, mystatus, strlen(mystatus));
-        }
-        else if(type == _FIXPOS_STATUS)
-        {
-            send_char_NRZI(app, _DT_POS, 1);
-            send_string_len(app, lat, strlen(lat));
-            send_char_NRZI(app, sym_ovl, 1);
-            send_string_len(app, lon, strlen(lon));
-            send_char_NRZI(app, sym_tab, 1);
-
-            send_char_NRZI(app, ' ', 1);
-            send_string_len(app, mystatus, strlen(mystatus));
-        }
-    FURI_CRITICAL_EXIT();
+static void aprs_radio_stop_rx(APRSHelloWorldCleanApp* app) {
+    if(app->radio_ready && app->rx_running) {
+        furi_hal_subghz_stop_async_rx();
+        furi_hal_subghz_idle();
+        app->rx_running = false;
+    }
 }
 
-//---------------------------------------------------------------------------
+static void aprs_radio_capture_callback(bool level, uint32_t duration, void* context) {
+    APRSHelloWorldCleanApp* app = context;
 
-/*
- * This function will send one byte input and convert it
- * into AFSK signal one bit at a time LSB first.
- * 
- * The encode which used is NRZI (Non Return to Zero, Inverted)
- * bit 1 : transmitted as no change in tone
- * bit 0 : transmitted as change in tone
- */
-
-void send_char_NRZI(APRSHelloWorldCleanApp* app, unsigned char in_byte, bool enBitStuff)
-{
-    FURI_CRITICAL_ENTER();
-        bool bits;
-        
-        for(int i = 0; i < 8; i++)
-        {
-            bits = in_byte & 0x01;
-
-            calc_crc(bits);
-
-            if(bits)
-            {
-                set_nada(app, nada);
-                bit_stuff++;
-
-                if((enBitStuff) && (bit_stuff == 5))
-                {
-                    nada ^= 1;
-                    set_nada(app, nada);
-                    
-                    bit_stuff = 0;
-                }
-            }
-            else
-            {
-                nada ^= 1;
-                set_nada(app, nada);
-
-                bit_stuff = 0;
-            }
-
-            in_byte >>= 1;
-        }
-    FURI_CRITICAL_EXIT();
+    app->last_edge_level = level;
+    app->last_edge_duration_us = duration;
+    app->rx_edge_count++;
 }
 
-//---------------------------------------------------------------------------
+static bool aprs_radio_start_rx(APRSHelloWorldCleanApp* app) {
+    if(!app->radio_ready) {
+        return false;
+    }
 
-void send_string_len(APRSHelloWorldCleanApp* app, const char *in_string, int len)
-{
-    FURI_CRITICAL_ENTER();
-        for(int j=0; j<len; j++)
-        {
-            send_char_NRZI(app, in_string[j], 1);
-        }
-    FURI_CRITICAL_EXIT();
+    furi_hal_subghz_idle();
+    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_gfsk_9_99kb_async_regs);
+    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(app->frequency_hz);
+    furi_hal_subghz_start_async_rx(aprs_radio_capture_callback, app);
+    furi_hal_subghz_rx();
+    app->rx_running = true;
+    app->last_rssi = furi_hal_subghz_get_rssi();
+    app->last_lqi = furi_hal_subghz_get_lqi();
+    FURI_LOG_I(TAG, "RX started at %lu Hz", (unsigned long)app->frequency_hz);
+    return true;
 }
 
-//---------------------------------------------------------------------------
+static LevelDuration aprs_radio_tx_callback(void* context) {
+    APRSHelloWorldCleanApp* app = context;
 
-void send_flag(APRSHelloWorldCleanApp* app, unsigned char flag_len)
-{
-    FURI_CRITICAL_ENTER();
-        for(int j=0; j<flag_len; j++)
-            send_char_NRZI(app, _FLAG, 0);
-    FURI_CRITICAL_EXIT();
+    if(app->tx_level_index >= app->tx_level_count) {
+        return level_duration_reset();
+    }
+
+    const bool level = app->tx_levels[app->tx_level_index++];
+    return level_duration_make(level, APRS_GFSK_BIT_DURATION_US);
 }
 
-//---------------------------------------------------------------------------
+static bool aprs_refresh_frame(APRSHelloWorldCleanApp* app) {
+    if(aprs_ax25_make_mystatus(
+           app->status_text,
+           sizeof(app->status_text),
+           app->frequency_hz,
+           app->tx_armed) == 0U) {
+        aprs_set_status(app, "status text failed");
+        return false;
+    }
 
-/*
- * In this preliminary test, a packet is consists of FLAG(s) and PAYLOAD(s).
- * Standard APRS FLAG is 0x7e character sent over and over again as a packet
- * delimiter. In this example, 100 flags is used the preamble and 3 flags as
- * the postamble.
- */
+    app->frame_size = aprs_ax25_encode_status_frame(
+        &aprs_address, app->status_text, app->frame_buffer, sizeof(app->frame_buffer));
+    if(app->frame_size == 0U) {
+        aprs_set_status(app, "AX25 frame failed");
+        return false;
+    }
 
-void send_packet(APRSHelloWorldCleanApp* app, uint8_t packet_type)
-{
-    notification_message(app->notifications, &red_led_enable);
+    if(!aprs_ax25_build_nrzi_stream(
+           app->frame_buffer,
+           app->frame_size,
+           APRS_PREAMBLE_FLAGS,
+           APRS_POSTAMBLE_FLAGS,
+           app->tx_levels,
+           APRS_HELLO_WORLD_TX_LEVEL_CAPACITY,
+           &app->tx_level_count)) {
+        app->tx_level_count = 0U;
+        aprs_set_status(app, "NRZI stream failed");
+        return false;
+    }
 
-    FURI_CRITICAL_ENTER();        
-        /*
-        * AX25 FRAME
-        * 
-        * ........................................................
-        * |  FLAG(s) |  HEADER  | PAYLOAD  | FCS(CRC) |  FLAG(s) |
-        * --------------------------------------------------------
-        * |  N bytes | 22 bytes |  N bytes | 2 bytes  |  N bytes |
-        * --------------------------------------------------------
-        * 
-        * FLAG(s)  : 0x7e
-        * HEADER   : see header
-        * PAYLOAD  : 1 byte data type + N byte info
-        * FCS      : 2 bytes calculated from HEADER + PAYLOAD
-        */
+    app->tx_bit_count = (uint32_t)app->tx_level_count;
+    aprs_hex_preview(
+        app->frame_buffer, app->frame_size, app->last_tx_hex, sizeof(app->last_tx_hex), 8U);
 
-        send_flag(app, 100);        
-        
-        crc = 0xffff;
-        send_header(app);
-    
-        send_payload(app, packet_type);
+    FURI_LOG_I(
+        TAG,
+        "AX25 status: %s | frame=%u bytes | preview=%s",
+        app->status_text,
+        (unsigned int)app->frame_size,
+        app->last_tx_hex);
 
-        send_crc(app);
-        
-        send_flag(app, 3);
-        
-    FURI_CRITICAL_EXIT();
-    
-    notification_message(app->notifications, &red_led_disable);
-    
+    aprs_set_status(app, "frame ready");
+    return true;
 }
 
-//---------------------------------------------------------------------------
+static bool aprs_radio_start_tx(APRSHelloWorldCleanApp* app) {
+    if(!app->radio_ready) {
+        aprs_set_status(app, "radio not ready");
+        FURI_LOG_E(TAG, "TX request rejected: radio not ready");
+        return false;
+    }
 
-/*
- * Function to randomized the value of a variable with defined low and hi limit value.
- * Used to create random AFSK pulse length.
- */
-void randomize(unsigned int *var, unsigned int low, unsigned int high)
-{
-    *var = low + rand() % (high - low);
+    if(app->tx_running) {
+        aprs_set_status(app, "TX already running");
+        FURI_LOG_W(TAG, "TX request rejected: already running");
+        return false;
+    }
+
+    if(app->mode != AprsRadioModeLabTx) {
+        aprs_set_status(app, "switch to LAB TX");
+        FURI_LOG_W(TAG, "TX request rejected: current mode is RX");
+        return false;
+    }
+
+    if(!app->tx_armed) {
+        aprs_set_status(app, "arm TX first");
+        FURI_LOG_W(TAG, "TX request rejected: tx not armed");
+        return false;
+    }
+
+    if(!aprs_refresh_frame(app)) {
+        FURI_LOG_E(TAG, "TX request rejected: frame refresh failed");
+        return false;
+    }
+
+    aprs_radio_stop_rx(app);
+
+    furi_hal_subghz_idle();
+    furi_hal_subghz_reset();
+    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_gfsk_9_99kb_async_regs);
+    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(app->frequency_hz);
+    app->tx_allowed_in_region = furi_hal_region_is_frequency_allowed(app->frequency_hz);
+
+    if(!app->tx_allowed_in_region || !furi_hal_subghz_tx()) {
+        app->tx_last_start_ok = false;
+        aprs_set_status(app, "TX restricted in region");
+        FURI_LOG_E(
+            TAG,
+            "TX restricted at %lu Hz for region %s",
+            (unsigned long)app->frequency_hz,
+            app->region_name);
+        notification_message(app->notifications, &sequence_tx_error);
+        aprs_radio_start_rx(app);
+        return false;
+    }
+
+    furi_hal_power_suppress_charge_enter();
+    app->tx_level_index = 0U;
+    app->tx_last_start_ok = furi_hal_subghz_start_async_tx(aprs_radio_tx_callback, app);
+
+    if(!app->tx_last_start_ok) {
+        furi_hal_power_suppress_charge_exit();
+        aprs_set_status(app, "TX start failed");
+        FURI_LOG_E(TAG, "TX start failed at %lu Hz", (unsigned long)app->frequency_hz);
+        notification_message(app->notifications, &sequence_tx_error);
+        aprs_radio_start_rx(app);
+        return false;
+    }
+
+    notification_message(app->notifications, &sequence_tx_start);
+    app->tx_running = true;
+    app->tx_packets++;
+    aprs_set_status(app, "TX in progress");
+    FURI_LOG_I(
+        TAG,
+        "TX started: freq=%lu frame=%u bits=%lu preview=%s",
+        (unsigned long)app->frequency_hz,
+        (unsigned int)app->frame_size,
+        (unsigned long)app->tx_bit_count,
+        app->last_tx_hex);
+    return true;
 }
 
-//---------------------------------------------------------------------------
+static void aprs_radio_poll(APRSHelloWorldCleanApp* app) {
+    if(!app->radio_ready) {
+        return;
+    }
 
-static void aprs_hello_world_clean_app_input_callback(InputEvent* input_event, void* ctx){
+    app->last_rssi = furi_hal_subghz_get_rssi();
+    app->last_lqi = furi_hal_subghz_get_lqi();
+
+    if(app->tx_running && furi_hal_subghz_is_async_tx_complete()) {
+        furi_hal_subghz_stop_async_tx();
+        furi_hal_power_suppress_charge_exit();
+        furi_hal_subghz_idle();
+        notification_message(app->notifications, &sequence_tx_stop);
+        notification_message(app->notifications, &sequence_rx_activity);
+        app->tx_running = false;
+        aprs_set_status(app, "TX complete");
+        FURI_LOG_I(
+            TAG,
+            "TX complete: packets=%lu last_rssi=%d last_lqi=%u",
+            (unsigned long)app->tx_packets,
+            (int)app->last_rssi,
+            app->last_lqi);
+        aprs_radio_start_rx(app);
+    }
+}
+
+static bool aprs_radio_init(APRSHelloWorldCleanApp* app) {
+    app->frequency_hz = APRS_FREQUENCY_HZ;
+    app->tx_allowed_in_region = furi_hal_region_is_frequency_allowed(app->frequency_hz);
+    snprintf(app->region_name, sizeof(app->region_name), "%s", furi_hal_region_get_name());
+
+    if(!furi_hal_subghz_is_frequency_valid(app->frequency_hz)) {
+        aprs_set_status(app, "freq invalid");
+        return false;
+    }
+
+    furi_hal_subghz_reset();
+    app->radio_ready = true;
+    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(app->frequency_hz);
+    aprs_set_status(app, app->tx_allowed_in_region ? "RX ready, TX allowed" :
+                                                  "RX ready, TX restricted");
+    FURI_LOG_I(
+        TAG,
+        "Radio init: region=%s freq=%lu tx_allowed=%s",
+        app->region_name,
+        (unsigned long)app->frequency_hz,
+        app->tx_allowed_in_region ? "yes" : "no");
+    return aprs_radio_start_rx(app);
+}
+
+static void aprs_radio_deinit(APRSHelloWorldCleanApp* app) {
+    if(!app->radio_ready) {
+        return;
+    }
+
+    aprs_radio_stop_rx(app);
+
+    if(app->tx_running) {
+        furi_hal_subghz_stop_async_tx();
+        furi_hal_power_suppress_charge_exit();
+        app->tx_running = false;
+    }
+
+    furi_hal_subghz_idle();
+    furi_hal_subghz_sleep();
+    app->radio_ready = false;
+}
+
+static void aprs_hello_world_clean_app_input_callback(InputEvent* input_event, void* ctx) {
     furi_assert(ctx);
     FuriMessageQueue* event_queue = ctx;
-
 
     APRSHelloWorldCleanEvent event = {.type = EventTypeInput, .input = *input_event};
     furi_message_queue_put(event_queue, &event, FuriWaitForever);
 }
 
-//---------------------------------------------------------------------------
-// Function to simulate receiving a message
-uint16_t receive_message(uint8_t* message, uint16_t max_size) {
-    // Simulated message for testing
-    const char* simulated_message = "Its me, Mario. APRS!";
-
-    // Copy the simulated message into the buffer
-    uint16_t message_size = strlen(simulated_message);
-    if (message_size > max_size) {
-        message_size = max_size;
-    }
-    memcpy(message, simulated_message, message_size);
-
-    return message_size;
+static void aprs_draw_status_line(Canvas* canvas, uint8_t y, const char* text) {
+    canvas_draw_str(canvas, 2, y, text);
 }
 
-void display_raw_data(Canvas* canvas, int16_t x, int16_t y, const uint8_t* data, uint16_t size) {
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, x, y, "Raw Data:");
+static void aprs_hello_world_clean_app_draw_callback(Canvas* canvas, void* ctx) {
+    APRSHelloWorldCleanApp* app = ctx;
+    char line[64];
 
-    char hex_buffer[3];  // Increase buffer size to hold two hexadecimal characters and the null terminator
-    uint16_t line_length = 0;
-
-    for (uint16_t i = 0; i < size; i++) {
-        // Check if the character is printable ASCII
-        if (data[i] >= 32 && data[i] <= 126) {
-            snprintf(hex_buffer, sizeof(hex_buffer), "%02hhX", data[i]);
-            canvas_draw_str(canvas, x + line_length * 20, y+10, hex_buffer);
-            line_length++;
-        }
-
-        // Move to the next line when the line length reaches the display width
-        if (line_length == 128 / 10) {
-            y += 20;
-            line_length = 0;
-        }
-    }
-}
-
-// Function to receive and display the message on the canvas
-void receive_and_display_message(Canvas* canvas, int16_t x, int16_t y) {
-    // Receive the message from the APRS packet
-    message_size = receive_message(message, MAX_PAYLOAD_SIZE);
-
-
-    // Display the message on the canvas
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, x, y, (const char*)message);
-    display_raw_data(canvas, x, y + 8, message, message_size);//задается отступ от текста до сырых данных
-    // Prevent the unused variable warning
-    (void)message_size;
-}
-
-
-static void aprs_hello_world_clean_app_draw_callback(Canvas* canvas, void* ctx){
-    UNUSED(ctx);
     canvas_clear(canvas);
+    canvas_set_font(canvas, FontSecondary);
 
-   // canvas_set_font(canvas, FontSecondary);
-   // canvas_draw_str(canvas, 14, 8, "This is an APRS Hello World");
-    
-    //canvas_set_font(canvas, FontSecondary);
-    //canvas_draw_str(canvas, 55, 16, "RUN");
-    receive_and_display_message(canvas, 1, 8);
-    //display_raw_data(canvas, 10, 10, message, message_size);
-    //receive_and_display_message(canvas, 55, 16);  // Display the primary message
+    if(!app) {
+        canvas_draw_str(canvas, 2, 10, "No app context");
+        return;
+    }
 
-  //  canvas_set_font(canvas, FontSecondary);
-  //  elements_multiline_text_aligned(canvas, 127, 40, AlignRight, AlignTop, "to finish, \n click back");
-  //  canvas_set_font(canvas, FontSecondary);
-  //  elements_multiline_text_aligned(canvas, 50, 40, AlignRight, AlignTop, "to RX, \n click up");
-    
+    snprintf(
+        line,
+        sizeof(line),
+        "APRS 432.500 %s",
+        app->mode == AprsRadioModeLabTx ? "LABTX" : "RX");
+    aprs_draw_status_line(canvas, 8, line);
+
+    snprintf(
+        line,
+        sizeof(line),
+        "Arm:%s TX:%s %s",
+        app->tx_armed ? "yes" : "no",
+        app->tx_running ? "busy" : "idle",
+        app->tx_allowed_in_region ? app->region_name : "LOCK");
+    aprs_draw_status_line(canvas, 16, line);
+
+    snprintf(line, sizeof(line), "RSSI:%3d LQI:%3u", (int)app->last_rssi, app->last_lqi);
+    aprs_draw_status_line(canvas, 24, line);
+
+    snprintf(
+        line,
+        sizeof(line),
+        "Edges:%lu %c%luus",
+        (unsigned long)app->rx_edge_count,
+        app->last_edge_level ? 'H' : 'L',
+        (unsigned long)app->last_edge_duration_us);
+    aprs_draw_status_line(canvas, 32, line);
+
+    snprintf(
+        line,
+        sizeof(line),
+        "Frame:%uB Bits:%lu",
+        (unsigned int)app->frame_size,
+        (unsigned long)app->tx_bit_count);
+    aprs_draw_status_line(canvas, 40, line);
+
+    aprs_draw_status_line(canvas, 48, app->last_status);
+    aprs_draw_status_line(canvas, 56, app->last_tx_hex);
+    aprs_draw_status_line(canvas, 63, "L arm R mode hold OK tx");
 }
-
-//---------------------------------------------------------------------------
 
 static void timer_callback(void* context) {
     FuriMessageQueue* event_queue = context;
     furi_assert(event_queue);
 
     APRSHelloWorldCleanEvent event = {.type = EventTypeTick};
-    furi_message_queue_put(event_queue, &event, 0);
+    furi_message_queue_put(event_queue, &event, 0U);
 }
 
-//---------------------------------------------------------------------------
-
-APRSHelloWorldCleanApp* aprs_hello_world_clean_app_alloc(){
+static APRSHelloWorldCleanApp* aprs_hello_world_clean_app_alloc(void) {
     APRSHelloWorldCleanApp* app = malloc(sizeof(APRSHelloWorldCleanApp));
 
+    memset(app, 0, sizeof(APRSHelloWorldCleanApp));
+
     app->view_port = view_port_alloc();
-    app->event_queue = furi_message_queue_alloc(8, sizeof(APRSHelloWorldCleanEvent));
+    app->event_queue = furi_message_queue_alloc(8U, sizeof(APRSHelloWorldCleanEvent));
     app->notifications = furi_record_open(RECORD_NOTIFICATION);
-
-    view_port_draw_callback_set(app->view_port, aprs_hello_world_clean_app_draw_callback, NULL);
-    view_port_input_callback_set(app->view_port, aprs_hello_world_clean_app_input_callback, app->event_queue);
-
     app->gui = furi_record_open(RECORD_GUI);
-    gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
-
     app->timer = furi_timer_alloc(timer_callback, FuriTimerTypePeriodic, app->event_queue);
 
-    app->output_pin = &gpio_ext_pa6;
+    app->mode = AprsRadioModeRxMonitor;
+    app->frequency_hz = APRS_FREQUENCY_HZ;
 
-    furi_hal_gpio_init(app->output_pin, GpioModeOutputPushPull, GpioPullNo, GpioSpeedVeryHigh);
+    view_port_draw_callback_set(app->view_port, aprs_hello_world_clean_app_draw_callback, app);
+    view_port_input_callback_set(
+        app->view_port, aprs_hello_world_clean_app_input_callback, app->event_queue);
+    gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
+
+    aprs_set_status(app, "booting");
+    aprs_refresh_frame(app);
+    aprs_radio_init(app);
 
     return app;
 }
 
-//---------------------------------------------------------------------------
-
-void aprs_hello_world_clean_app_free(APRSHelloWorldCleanApp* app){
+static void aprs_hello_world_clean_app_free(APRSHelloWorldCleanApp* app) {
     furi_assert(app);
 
-    view_port_enabled_set(app->view_port, false);   
+    aprs_radio_deinit(app);
+
+    view_port_enabled_set(app->view_port, false);
     gui_remove_view_port(app->gui, app->view_port);
     view_port_free(app->view_port);
 
     furi_timer_free(app->timer);
-
     furi_message_queue_free(app->event_queue);
 
     furi_record_close(RECORD_NOTIFICATION);
     furi_record_close(RECORD_GUI);
+
+    free(app);
 }
 
+static void aprs_handle_press(APRSHelloWorldCleanApp* app, InputKey key) {
+    switch(key) {
+    case InputKeyLeft:
+        app->tx_armed = !app->tx_armed;
+        aprs_refresh_frame(app);
+        aprs_set_status(app, app->tx_armed ? "LAB TX armed" : "LAB TX safe");
+        FURI_LOG_I(TAG, "TX armed=%s", app->tx_armed ? "yes" : "no");
+        break;
+    case InputKeyRight:
+        app->mode = (app->mode == AprsRadioModeRxMonitor) ? AprsRadioModeLabTx :
+                                                             AprsRadioModeRxMonitor;
+        aprs_set_status(app, app->mode == AprsRadioModeLabTx ? "mode LAB TX" : "mode RX");
+        FURI_LOG_I(TAG, "Mode changed to %s", app->mode == AprsRadioModeLabTx ? "LAB TX" : "RX");
+        break;
+    case InputKeyUp:
+        aprs_refresh_frame(app);
+        FURI_LOG_I(TAG, "Frame regenerated manually");
+        break;
+    case InputKeyDown:
+        app->rx_edge_count = 0U;
+        app->last_edge_duration_us = 0U;
+        app->last_edge_level = false;
+        aprs_set_status(app, "RX counters reset");
+        FURI_LOG_I(TAG, "RX counters reset");
+        break;
+    default:
+        break;
+    }
+}
 
-
-
-
-//---------------------------------------------------------------------------
-
-int32_t aprs_hello_world_clean_app(void *p){
+int32_t aprs_hello_world_clean_app(void* p) {
     UNUSED(p);
+
     APRSHelloWorldCleanApp* app = aprs_hello_world_clean_app_alloc();
-
     APRSHelloWorldCleanEvent event;
+    bool running = true;
 
-    furi_timer_start(app->timer, 5000);
+    furi_timer_start(app->timer, furi_ms_to_ticks(APP_TICK_PERIOD_MS));
 
-    //---------------------------------------------------------------------------
+    while(running) {
+        if(furi_message_queue_get(app->event_queue, &event, FuriWaitForever) != FuriStatusOk) {
+            continue;
+        }
 
+        if(event.type == EventTypeTick) {
+            aprs_radio_poll(app);
+            view_port_update(app->view_port);
+            continue;
+        }
 
+        if(event.type != EventTypeInput) {
+            continue;
+        }
 
-    while(1){
-        // Выбираем событие из очереди в переменную event (ждем бесконечно долго, если очередь пуста)
-        // и проверяем, что у нас получилось это сделать
-        furi_check(furi_message_queue_get(app->event_queue, &event, FuriWaitForever) == FuriStatusOk);
+        if(event.input.key == InputKeyBack && event.input.type == InputTypePress) {
+            running = false;
+            continue;
+        }
 
-        // Наше событие — это нажатие кнопки
-        if (event.type == EventTypeInput) {
-            // Если нажата кнопка "назад", то выходим из цикла, а следовательно и из приложения
-            if (event.input.key == InputKeyBack) {
-                break;
-            }
-            else if (event.input.key == InputKeyUp) {
-                notification_message(app->notifications, &sequence_blink_blue_100);
+        if(event.input.key == InputKeyOk && event.input.type == InputTypeLong) {
+            aprs_radio_start_tx(app);
+            continue;
+        }
 
-            }
-        // Наше событие — это сработавший таймер
-        } else if (event.type == EventTypeTick) {
-            // Сделаем что-то по таймеру
-            // Отправляем нотификацию мигания синим светодиодом
-            //notification_message(app->notifications, &sequence_blink_blue_100);
-            send_packet(app, (1+rand()%(4-1)));
+        if(event.input.type == InputTypePress) {
+            aprs_handle_press(app, event.input.key);
         }
     }
 
