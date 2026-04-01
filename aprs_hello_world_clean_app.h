@@ -1,12 +1,23 @@
 #pragma once
 
+#include "aprs_ax25_encoder.h"
+
 #include <furi.h>
 #include <gui/gui.h>
 #include <input/input.h>
 #include <notification/notification.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #define APRS_HELLO_WORLD_FRAME_BUFFER_SIZE 256U
 #define APRS_HELLO_WORLD_TX_LEVEL_CAPACITY 2048U
+
+#define APRS_CFG_CALL_LEN        7U
+#define APRS_CFG_STATUS_MAX      62U
+#define APRS_CFG_POS_STR_LEN     16U
+/** Max interval between consecutive short-clicks on Up to count as one gesture (ms). */
+#define APRS_TRIPLE_UP_WINDOW_MS 900U
+#define APRS_SETTINGS_MENU_ITEMS 8U
 
 typedef enum {
     EventTypeTick,
@@ -22,6 +33,19 @@ typedef enum {
     AprsRadioModeRxMonitor,
     AprsRadioModeLabTx,
 } AprsRadioMode;
+
+typedef enum {
+    AprsUiViewMain,
+    AprsUiViewSettingsMenu,
+    AprsUiViewSettingsMycall,
+    AprsUiViewSettingsSsid,
+    AprsUiViewSettingsPosition,
+    AprsUiViewSettingsBearing,
+    AprsUiViewSettingsSpeed,
+    AprsUiViewSettingsStatusText,
+    AprsUiViewSettingsPath1,
+    AprsUiViewSettingsPath2,
+} AprsUiView;
 
 typedef struct APRSHelloWorldCleanApp {
     Gui* gui;
@@ -46,6 +70,44 @@ typedef struct APRSHelloWorldCleanApp {
     bool tx_last_start_ok;
 
     AprsRadioMode mode;
+
+    AprsUiView ui_view;
+    uint8_t settings_menu_index;
+    uint8_t settings_menu_scroll;
+    uint32_t triple_up_last_tick;
+    uint8_t triple_up_count;
+    uint32_t ui_toast_until;
+    char ui_toast[28];
+
+    char cfg_source_call[APRS_CFG_CALL_LEN];
+    uint8_t cfg_source_ssid;
+    char cfg_dest_call[APRS_CFG_CALL_LEN];
+    uint8_t cfg_dest_ssid;
+    char cfg_path1_call[APRS_CFG_CALL_LEN];
+    uint8_t cfg_path1_ssid;
+    bool cfg_use_path1;
+    bool cfg_use_path2;
+    char cfg_path2_call[APRS_CFG_CALL_LEN];
+    uint8_t cfg_path2_ssid;
+
+    char cfg_lat[APRS_CFG_POS_STR_LEN];
+    char cfg_lon[APRS_CFG_POS_STR_LEN];
+    uint8_t pos_edit_line;
+    uint8_t pos_edit_cursor;
+
+    uint16_t cfg_bearing_deg;
+    uint16_t cfg_speed;
+
+    char cfg_status_text[APRS_CFG_STATUS_MAX + 1U];
+    uint8_t status_edit_cursor;
+
+    uint8_t mycall_edit_cursor;
+    uint8_t path1_edit_cursor;
+    uint8_t path2_edit_cursor;
+    bool path1_edit_ssid;
+    uint8_t path2_focus;
+
+    AprsAx25AddressConfig address_config;
 
     uint32_t tx_packets;
     uint32_t tx_bit_count;
