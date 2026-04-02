@@ -20,6 +20,9 @@
 #define APRS_POSTAMBLE_FLAGS       3U
 #define APP_TICK_PERIOD_MS         200U
 
+// Forward declarations
+static void aprs_set_status(APRSHelloWorldCleanApp* app, const char* text);
+
 static const NotificationSequence sequence_tx_start = {
     &message_red_255,
     NULL,
@@ -53,6 +56,35 @@ static void aprs_sync_address_config(APRSHelloWorldCleanApp* app) {
     app->address_config.path1_call = app->cfg_path1_call;
     app->address_config.path1_ssid = app->cfg_path1_ssid;
     app->address_config.use_path1 = app->cfg_use_path1;
+}
+
+static void aprs_save_config(APRSHelloWorldCleanApp* app) {
+    furi_assert(app);
+    AprsConfig config = {0};
+    
+    snprintf(config.cfg_source_call, sizeof(config.cfg_source_call), "%s", app->cfg_source_call);
+    config.cfg_source_ssid = app->cfg_source_ssid;
+    snprintf(config.cfg_dest_call, sizeof(config.cfg_dest_call), "%s", app->cfg_dest_call);
+    config.cfg_dest_ssid = app->cfg_dest_ssid;
+    snprintf(config.cfg_path1_call, sizeof(config.cfg_path1_call), "%s", app->cfg_path1_call);
+    config.cfg_path1_ssid = app->cfg_path1_ssid;
+    config.cfg_use_path1 = app->cfg_use_path1;
+    config.cfg_use_path2 = app->cfg_use_path2;
+    snprintf(config.cfg_path2_call, sizeof(config.cfg_path2_call), "%s", app->cfg_path2_call);
+    config.cfg_path2_ssid = app->cfg_path2_ssid;
+    snprintf(config.cfg_lat, sizeof(config.cfg_lat), "%s", app->cfg_lat);
+    snprintf(config.cfg_lon, sizeof(config.cfg_lon), "%s", app->cfg_lon);
+    config.cfg_bearing_deg = app->cfg_bearing_deg;
+    config.cfg_speed = app->cfg_speed;
+    snprintf(config.cfg_status_text, sizeof(config.cfg_status_text), "%s", app->cfg_status_text);
+    
+    if(aprs_config_save(&config)) {
+        aprs_set_status(app, "config saved");
+        FURI_LOG_I(TAG, "Configuration saved");
+    } else {
+        aprs_set_status(app, "save failed");
+        FURI_LOG_E(TAG, "Failed to save configuration");
+    }
 }
 
 static bool aprs_cfg_mycall_valid(const char* s) {
@@ -758,21 +790,24 @@ static APRSHelloWorldCleanApp* aprs_hello_world_clean_app_alloc(void) {
     app->frequency_hz = APRS_FREQUENCY_HZ;
     app->ui_view = AprsUiViewMain;
 
-    snprintf(app->cfg_source_call, sizeof(app->cfg_source_call), "MYCALL");
-    app->cfg_source_ssid = 1U;
-    snprintf(app->cfg_dest_call, sizeof(app->cfg_dest_call), "APRS");
-    app->cfg_dest_ssid = 0U;
-    snprintf(app->cfg_path1_call, sizeof(app->cfg_path1_call), "WIDE2");
-    app->cfg_path1_ssid = 2U;
-    app->cfg_use_path1 = true;
-    app->cfg_use_path2 = false;
-    snprintf(app->cfg_path2_call, sizeof(app->cfg_path2_call), "WIDE1");
-    app->cfg_path2_ssid = 1U;
-    snprintf(app->cfg_lat, sizeof(app->cfg_lat), "00.0000N");
-    snprintf(app->cfg_lon, sizeof(app->cfg_lon), "000.0000E");
-    app->cfg_bearing_deg = 0U;
-    app->cfg_speed = 0U;
-    snprintf(app->cfg_status_text, sizeof(app->cfg_status_text), "Flipper APRS cfg");
+    // Load configuration from storage
+    AprsConfig config = aprs_config_load();
+    snprintf(app->cfg_source_call, sizeof(app->cfg_source_call), "%s", config.cfg_source_call);
+    app->cfg_source_ssid = config.cfg_source_ssid;
+    snprintf(app->cfg_dest_call, sizeof(app->cfg_dest_call), "%s", config.cfg_dest_call);
+    app->cfg_dest_ssid = config.cfg_dest_ssid;
+    snprintf(app->cfg_path1_call, sizeof(app->cfg_path1_call), "%s", config.cfg_path1_call);
+    app->cfg_path1_ssid = config.cfg_path1_ssid;
+    app->cfg_use_path1 = config.cfg_use_path1;
+    app->cfg_use_path2 = config.cfg_use_path2;
+    snprintf(app->cfg_path2_call, sizeof(app->cfg_path2_call), "%s", config.cfg_path2_call);
+    app->cfg_path2_ssid = config.cfg_path2_ssid;
+    snprintf(app->cfg_lat, sizeof(app->cfg_lat), "%s", config.cfg_lat);
+    snprintf(app->cfg_lon, sizeof(app->cfg_lon), "%s", config.cfg_lon);
+    app->cfg_bearing_deg = config.cfg_bearing_deg;
+    app->cfg_speed = config.cfg_speed;
+    snprintf(app->cfg_status_text, sizeof(app->cfg_status_text), "%s", config.cfg_status_text);
+
     app->mycall_edit_cursor = 0U;
     app->pos_edit_line = 0U;
     app->pos_edit_cursor = 0U;
@@ -1129,6 +1164,7 @@ int32_t aprs_hello_world_clean_app(void* p) {
                 if(app->ui_view == AprsUiViewSettingsMenu) {
                     app->ui_view = AprsUiViewMain;
                     app->ui_toast[0] = '\0';
+                    aprs_save_config(app);
                     aprs_refresh_frame(app);
                 } else {
                     app->ui_view = AprsUiViewSettingsMenu;

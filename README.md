@@ -126,7 +126,7 @@ ufbt launch
 
 - Файлы VS Code для отладки генерируются командой `ufbt vscode_dist`
 - Конфигурации находятся в `.vscode/launch.json`
-- Для полноценной low-level отладки обычно нужен SWD-отладчик: ST-Link, CMSIS-DAP, J-Link или Black Magic Probe
+
 
 ## English
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aprs_ax25_encoder.h"
+#include "aprs_config.h"
 
 #include <furi.h>
 #include <gui/gui.h>

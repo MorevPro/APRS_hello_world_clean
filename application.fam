@@ -6,6 +6,7 @@ App(
     cdefines=["APP_aprs_hello_world_clean"],
     requires=[
         "gui",
+        "storage",
     ],
     stack_size=2 * 1024,
     order=90,
