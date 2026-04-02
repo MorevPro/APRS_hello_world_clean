@@ -56,6 +56,14 @@ static void aprs_sync_address_config(APRSHelloWorldCleanApp* app) {
     app->address_config.path1_call = app->cfg_path1_call;
     app->address_config.path1_ssid = app->cfg_path1_ssid;
     app->address_config.use_path1 = app->cfg_use_path1;
+    app->address_config.path2_call = app->cfg_path2_call;
+    app->address_config.path2_ssid = app->cfg_path2_ssid;
+    app->address_config.use_path2 = app->cfg_use_path2;
+    app->address_config.status_text = app->cfg_status_text;
+    app->address_config.position_lat = app->cfg_lat;
+    app->address_config.position_lon = app->cfg_lon;
+    app->address_config.bearing_deg = app->cfg_bearing_deg;
+    app->address_config.speed = app->cfg_speed;
 }
 
 static void aprs_save_config(APRSHelloWorldCleanApp* app) {
@@ -197,12 +205,11 @@ static void aprs_set_status(APRSHelloWorldCleanApp* app, const char* text) {
     snprintf(app->last_status, sizeof(app->last_status), "%s", text);
 }
 
-static void aprs_hex_preview(
+static void aprs_hex_full_dump(
     const uint8_t* data,
     size_t data_size,
     char* out,
-    size_t out_size,
-    size_t max_bytes) {
+    size_t out_size) {
     if(!out || (out_size == 0U)) {
         return;
     }
@@ -213,15 +220,10 @@ static void aprs_hex_preview(
         return;
     }
 
-    size_t preview_size = data_size;
-    if(preview_size > max_bytes) {
-        preview_size = max_bytes;
-    }
-
     size_t offset = 0U;
-    for(size_t i = 0; i < preview_size; i++) {
+    for(size_t i = 0; i < data_size; i++) {
         int written = snprintf(
-            out + offset, out_size - offset, "%02X%s", data[i], (i + 1U < preview_size) ? " " : "");
+            out + offset, out_size - offset, "%02X", data[i]);
         if(written < 0) {
             break;
         }
@@ -233,10 +235,6 @@ static void aprs_hex_preview(
         }
 
         offset += step;
-    }
-
-    if((preview_size < data_size) && (offset + 4U < out_size)) {
-        snprintf(out + offset, out_size - offset, " ...");
     }
 }
 
@@ -287,19 +285,48 @@ static LevelDuration aprs_radio_tx_callback(void* context) {
 static bool aprs_refresh_frame(APRSHelloWorldCleanApp* app) {
     aprs_sync_address_config(app);
 
-    if(aprs_ax25_make_mystatus(
-           app->status_text,
-           sizeof(app->status_text),
-           app->frequency_hz,
-           app->tx_armed) == 0U) {
-        aprs_set_status(app, "status text failed");
-        return false;
+    // Log current configuration
+    FURI_LOG_I(TAG, "=== Frame config ===");
+    FURI_LOG_I(TAG, "Source: %s-%u", app->address_config.source_call, app->address_config.source_ssid);
+    FURI_LOG_I(TAG, "Dest: %s-%u", app->address_config.destination_call, app->address_config.destination_ssid);
+    FURI_LOG_I(TAG, "Path1: %s-%u (use=%d)", app->address_config.path1_call, app->address_config.path1_ssid, app->address_config.use_path1);
+    FURI_LOG_I(TAG, "Path2: %s-%u (use=%d)", app->address_config.path2_call, app->address_config.path2_ssid, app->address_config.use_path2);
+    FURI_LOG_I(TAG, "Status: '%s'", app->address_config.status_text ? app->address_config.status_text : "(null)");
+    FURI_LOG_I(TAG, "Lat: '%s', Lon: '%s'", app->address_config.position_lat, app->address_config.position_lon);
+
+    // Try to encode position frame if coordinates are valid
+    if(aprs_ax25_position_is_valid(&app->address_config)) {
+        FURI_LOG_I(TAG, "Position is valid, encoding position frame");
+        app->frame_size = aprs_ax25_encode_position_frame(
+            &app->address_config, app->frame_buffer, sizeof(app->frame_buffer));
+        
+        if(app->frame_size > 0) {
+            snprintf(app->status_text, sizeof(app->status_text), "Position");
+            FURI_LOG_I(TAG, "Position frame size: %u bytes", (unsigned int)app->frame_size);
+        } else {
+            aprs_set_status(app, "Position frame too large");
+            FURI_LOG_E(TAG, "Position frame encoding failed");
+            return false;
+        }
+    } else {
+        FURI_LOG_I(TAG, "Position invalid, encoding status frame");
+        // Fall back to status frame
+        app->frame_size = aprs_ax25_encode_status_frame(
+            &app->address_config, app->frame_buffer, sizeof(app->frame_buffer));
+        
+        if(app->frame_size == 0U) {
+            aprs_set_status(app, "Status frame failed");
+            FURI_LOG_E(TAG, "Status frame encoding failed");
+            return false;
+        }
+        
+        FURI_LOG_I(TAG, "Status frame size: %u bytes", (unsigned int)app->frame_size);
+        snprintf(app->status_text, sizeof(app->status_text), "Status");
     }
 
-    app->frame_size = aprs_ax25_encode_status_frame(
-        &app->address_config, app->status_text, app->frame_buffer, sizeof(app->frame_buffer));
-    if(app->frame_size == 0U) {
-        aprs_set_status(app, "AX25 frame failed");
+    // Check frame size against AX.25 standard maximum (255 bytes)
+    if(app->frame_size > 255U) {
+        aprs_set_status(app, "Frame too large (>255)");
         return false;
     }
 
@@ -317,13 +344,14 @@ static bool aprs_refresh_frame(APRSHelloWorldCleanApp* app) {
     }
 
     app->tx_bit_count = (uint32_t)app->tx_level_count;
-    aprs_hex_preview(
-        app->frame_buffer, app->frame_size, app->last_tx_hex, sizeof(app->last_tx_hex), 8U);
+    aprs_hex_full_dump(
+        app->frame_buffer, app->frame_size, app->last_tx_hex, sizeof(app->last_tx_hex));
 
     FURI_LOG_I(
         TAG,
-        "AX25 status: %s | frame=%u bytes | preview=%s",
+        "AX25 %s: %s | frame=%u bytes | full_hex=%s",
         app->status_text,
+        app->address_config.status_text ? app->address_config.status_text : "(empty)",
         (unsigned int)app->frame_size,
         app->last_tx_hex);
 
@@ -401,7 +429,7 @@ static bool aprs_radio_start_tx(APRSHelloWorldCleanApp* app) {
     aprs_set_status(app, "TX in progress");
     FURI_LOG_I(
         TAG,
-        "TX started: freq=%lu frame=%u bits=%lu preview=%s",
+        "TX started: freq=%lu frame=%u bits=%lu full_hex=%s",
         (unsigned long)app->frequency_hz,
         (unsigned int)app->frame_size,
         (unsigned long)app->tx_bit_count,
@@ -807,6 +835,14 @@ static APRSHelloWorldCleanApp* aprs_hello_world_clean_app_alloc(void) {
     app->cfg_bearing_deg = config.cfg_bearing_deg;
     app->cfg_speed = config.cfg_speed;
     snprintf(app->cfg_status_text, sizeof(app->cfg_status_text), "%s", config.cfg_status_text);
+
+    FURI_LOG_I(TAG, "=== Config loaded ===");
+    FURI_LOG_I(TAG, "Source: %s-%u", app->cfg_source_call, app->cfg_source_ssid);
+    FURI_LOG_I(TAG, "Dest: %s-%u", app->cfg_dest_call, app->cfg_dest_ssid);
+    FURI_LOG_I(TAG, "Path1: %s-%u (use=%d)", app->cfg_path1_call, app->cfg_path1_ssid, app->cfg_use_path1);
+    FURI_LOG_I(TAG, "Path2: %s-%u (use=%d)", app->cfg_path2_call, app->cfg_path2_ssid, app->cfg_use_path2);
+    FURI_LOG_I(TAG, "Status: '%s'", app->cfg_status_text);
+    FURI_LOG_I(TAG, "Lat: '%s', Lon: '%s'", app->cfg_lat, app->cfg_lon);
 
     app->mycall_edit_cursor = 0U;
     app->pos_edit_line = 0U;

@@ -8,6 +8,7 @@
 #define APRS_AX25_PID_NO_L3   0xF0U
 #define APRS_AX25_FLAG        0x7EU
 #define APRS_AX25_ADDRESS_LEN 7U
+#define APRS_AX25_MAX_FRAME   255U
 
 static void aprs_ax25_crc_update(uint16_t* crc, uint8_t data) {
     *crc ^= data;
@@ -45,85 +46,212 @@ static size_t aprs_ax25_write_address(
     return APRS_AX25_ADDRESS_LEN;
 }
 
-size_t aprs_ax25_make_mystatus(
-    char* buffer,
-    size_t buffer_size,
-    uint32_t frequency_hz,
-    bool tx_armed) {
-    if(!buffer || (buffer_size == 0U)) {
-        return 0;
+bool aprs_ax25_position_is_valid(const AprsAx25AddressConfig* config) {
+    if(!config || !config->position_lat || !config->position_lon) {
+        return false;
     }
 
-    int written = snprintf(
-        buffer,
-        buffer_size,
-        "Flipper Zero lab beacon %lu.%03lu MHz tx=%s",
-        (unsigned long)(frequency_hz / 1000000UL),
-        (unsigned long)((frequency_hz / 1000UL) % 1000UL),
-        tx_armed ? "armed" : "safe");
+    // Check if position is not all zeros/default
+    const char* lat = config->position_lat;
+    const char* lon = config->position_lon;
 
-    if(written < 0) {
-        buffer[0] = '\0';
-        return 0;
+    // Reject default/zero coordinates (00.0000N and 000.0000E)
+    if(strcmp(lat, "00.0000N") == 0 && strcmp(lon, "000.0000E") == 0) {
+        return false;  // Default coordinates, not valid for transmission
     }
 
-    if((size_t)written >= buffer_size) {
-        buffer[buffer_size - 1U] = '\0';
-        return buffer_size - 1U;
+    // Simple validation: check length and presence of direction indicators (N/S, E/W)
+    if(strlen(lat) > 0 && strlen(lon) > 0) {
+        char lat_dir = lat[strlen(lat) - 1];
+        char lon_dir = lon[strlen(lon) - 1];
+
+        if((lat_dir == 'N' || lat_dir == 'S') && (lon_dir == 'E' || lon_dir == 'W')) {
+            return true;
+        }
     }
 
-    return (size_t)written;
+    return false;
 }
 
 size_t aprs_ax25_encode_status_frame(
     const AprsAx25AddressConfig* config,
-    const char* status_text,
     uint8_t* out,
     size_t out_size) {
-    if(!config || !status_text || !out) {
+    if(!config || !out) {
         return 0;
     }
 
+    const char* status_text = config->status_text ? config->status_text : "";
     const size_t status_len = strlen(status_text);
-    const size_t path_count = config->use_path1 ? 1U : 0U;
-    const size_t address_count = 2U + path_count;
-    const size_t required_size =
-        (address_count * APRS_AX25_ADDRESS_LEN) + 2U + 1U + status_len + 2U;
 
-    if(required_size > out_size) {
+    // Limit status to APRS standard
+    const size_t max_status_len = 62U;
+    const size_t actual_status_len = status_len > max_status_len ? max_status_len : status_len;
+
+    // Calculate path count
+    size_t path_count = 0;
+    if(config->use_path1) path_count++;
+    if(config->use_path2) path_count++;
+
+    const size_t address_count = 2U + path_count; // destination + source + paths
+    const size_t required_size =
+        (address_count * APRS_AX25_ADDRESS_LEN) + 2U + 1U + actual_status_len + 2U;
+
+    if(required_size > out_size || required_size > APRS_AX25_MAX_FRAME) {
         return 0;
     }
 
     size_t offset = 0U;
 
+    // Write destination (NEVER last)
     offset += aprs_ax25_write_address(
         &out[offset],
         out_size - offset,
         config->destination_call,
         config->destination_ssid,
         false);
+
+    // Determine if source is last (no paths remain)
+    bool source_is_last = !(config->use_path1 || config->use_path2);
+    
+    // Write source
     offset += aprs_ax25_write_address(
         &out[offset],
         out_size - offset,
         config->source_call,
         config->source_ssid,
-        !config->use_path1);
+        source_is_last);
 
+    // Write path1 if used
     if(config->use_path1) {
+        bool path1_is_last = !config->use_path2;
         offset += aprs_ax25_write_address(
             &out[offset],
             out_size - offset,
             config->path1_call,
             config->path1_ssid,
-            true);
+            path1_is_last);
     }
 
+    // Write path2 if used
+    if(config->use_path2) {
+        offset += aprs_ax25_write_address(
+            &out[offset], out_size - offset, config->path2_call, config->path2_ssid, true);
+    }
+
+    // Control and PID
     out[offset++] = APRS_AX25_CONTROL_UI;
     out[offset++] = APRS_AX25_PID_NO_L3;
-    out[offset++] = '>';
-    memcpy(&out[offset], status_text, status_len);
-    offset += status_len;
 
+    // Info identifier for status ('>')
+    out[offset++] = '>';
+
+    // Copy status text
+    memcpy(&out[offset], status_text, actual_status_len);
+    offset += actual_status_len;
+
+    // Calculate and write CRC
+    uint16_t crc = 0xFFFFU;
+    for(size_t i = 0; i < offset; i++) {
+        aprs_ax25_crc_update(&crc, out[i]);
+    }
+
+    crc ^= 0xFFFFU;
+    out[offset++] = (uint8_t)(crc & 0x00FFU);
+    out[offset++] = (uint8_t)((crc >> 8U) & 0x00FFU);
+
+    return offset;
+}
+
+size_t aprs_ax25_encode_position_frame(
+    const AprsAx25AddressConfig* config,
+    uint8_t* out,
+    size_t out_size) {
+    if(!config || !out) {
+        return 0;
+    }
+
+    if(!aprs_ax25_position_is_valid(config)) {
+        return 0;
+    }
+
+    // Build position info: !DDMM.hhN/DDDMM.hhE[/BRG/SPD]status
+    // For now, simplified: !lat/lon/status
+    char position_info[128] = {0};
+    const char* status = config->status_text ? config->status_text : "";
+
+    int pos_len = snprintf(
+        position_info,
+        sizeof(position_info),
+        "!%s/%s/%s",
+        config->position_lat,
+        config->position_lon,
+        status);
+
+    if(pos_len <= 0 || pos_len >= (int)sizeof(position_info)) {
+        return 0;
+    }
+
+    // Calculate path count
+    size_t path_count = 0;
+    if(config->use_path1) path_count++;
+    if(config->use_path2) path_count++;
+
+    const size_t address_count = 2U + path_count; // destination + source + paths
+    const size_t required_size =
+        (address_count * APRS_AX25_ADDRESS_LEN) + 2U + (size_t)pos_len + 2U;
+
+    if(required_size > out_size || required_size > APRS_AX25_MAX_FRAME) {
+        return 0;
+    }
+
+    size_t offset = 0U;
+
+    // Write destination (NEVER last)
+    offset += aprs_ax25_write_address(
+        &out[offset],
+        out_size - offset,
+        config->destination_call,
+        config->destination_ssid,
+        false);
+
+    // Determine if source is last (no paths remain)
+    bool source_is_last = !(config->use_path1 || config->use_path2);
+    
+    // Write source
+    offset += aprs_ax25_write_address(
+        &out[offset],
+        out_size - offset,
+        config->source_call,
+        config->source_ssid,
+        source_is_last);
+
+    // Write path1 if used
+    if(config->use_path1) {
+        bool path1_is_last = !config->use_path2;
+        offset += aprs_ax25_write_address(
+            &out[offset],
+            out_size - offset,
+            config->path1_call,
+            config->path1_ssid,
+            path1_is_last);
+    }
+
+    // Write path2 if used
+    if(config->use_path2) {
+        offset += aprs_ax25_write_address(
+            &out[offset], out_size - offset, config->path2_call, config->path2_ssid, true);
+    }
+
+    // Control and PID
+    out[offset++] = APRS_AX25_CONTROL_UI;
+    out[offset++] = APRS_AX25_PID_NO_L3;
+
+    // Copy position info
+    memcpy(&out[offset], position_info, (size_t)pos_len);
+    offset += (size_t)pos_len;
+
+    // Calculate and write CRC
     uint16_t crc = 0xFFFFU;
     for(size_t i = 0; i < offset; i++) {
         aprs_ax25_crc_update(&crc, out[i]);
@@ -168,8 +296,7 @@ static bool aprs_ax25_emit_byte_nrzi(
             (*consecutive_ones)++;
         }
 
-        if(!aprs_ax25_emit_bit(
-               *current_level, out_levels, out_level_capacity, out_level_count)) {
+        if(!aprs_ax25_emit_bit(*current_level, out_levels, out_level_capacity, out_level_count)) {
             return false;
         }
 

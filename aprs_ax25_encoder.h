@@ -12,19 +12,30 @@ typedef struct {
     const char* path1_call;
     uint8_t path1_ssid;
     bool use_path1;
+    const char* path2_call;
+    uint8_t path2_ssid;
+    bool use_path2;
+    const char* status_text;
+    const char* position_lat;
+    const char* position_lon;
+    uint16_t bearing_deg;
+    uint16_t speed;
 } AprsAx25AddressConfig;
-
-size_t aprs_ax25_make_mystatus(
-    char* buffer,
-    size_t buffer_size,
-    uint32_t frequency_hz,
-    bool tx_armed);
 
 size_t aprs_ax25_encode_status_frame(
     const AprsAx25AddressConfig* config,
-    const char* status_text,
     uint8_t* out,
     size_t out_size);
+
+size_t aprs_ax25_encode_position_frame(
+    const AprsAx25AddressConfig* config,
+    uint8_t* out,
+    size_t out_size);
+
+/**
+ * Returns true if coordinates are valid for position report.
+ */
+bool aprs_ax25_position_is_valid(const AprsAx25AddressConfig* config);
 
 bool aprs_ax25_build_nrzi_stream(
     const uint8_t* frame,

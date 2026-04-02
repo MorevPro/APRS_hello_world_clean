@@ -101,11 +101,13 @@ AprsConfig aprs_config_load(void) {
 
     File* file = storage_file_alloc(storage);
     if(!storage_file_open(file, APRS_CONFIG_FILE_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        FURI_LOG_I(TAG, "Config file not found, using defaults");
+        FURI_LOG_I(TAG, "Config file not found at '%s', using defaults", APRS_CONFIG_FILE_PATH);
         storage_file_free(file);
         furi_record_close(RECORD_STORAGE);
         return config;
     }
+
+    FURI_LOG_I(TAG, "Config file found, reading...");
 
     // Read and verify version
     uint8_t version = 0;
@@ -138,6 +140,8 @@ AprsConfig aprs_config_load(void) {
     storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
 
-    FURI_LOG_I(TAG, "Config loaded successfully");
+    FURI_LOG_I(TAG, "Config loaded successfully from '%s'", APRS_CONFIG_FILE_PATH);
+    FURI_LOG_I(TAG, "  Source: %s-%u", config.cfg_source_call, config.cfg_source_ssid);
+    FURI_LOG_I(TAG, "  Status: '%s'", config.cfg_status_text);
     return config;
 }
