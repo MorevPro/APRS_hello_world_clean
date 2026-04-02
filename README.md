@@ -210,6 +210,46 @@ EC 42                       — FCS (CRC) little-endian
 - Байты 18+: payload (status text или position data)
 - Последние 2 байта: FCS (CRC16 little-endian)
 
+**Как проверить успешность передачи:**
+
+Ищи эти логи по порядку:
+
+1. `[APRS432] TX started: freq=... frame=... bits=...` — TX инициирована
+2. `[D][FuriHalSubGhz] Async TX Radio stats: on X us, off Y us, DutyCycle: Z%` — **КЛЮЧЕВОЙ ЛОГ**: Радио передавал X микросекунд
+3. `[APRS432] TX complete: packets=N ...` — Передача завершена, счётчик пакетов увеличился
+
+**Расчет времени передачи:**
+
+Status frame (42 байта):
+- ~617 бит в NRZI потоке
+- 617 × 104 мкс/бит ≈ 64 мс ≈ **0.064 сек** (короткий писк)
+
+Position frame (61 байт):
+- ~769 бит в NRZI потоке
+- 769 × 104 мкс/бит ≈ 80 мс ≈ **0.08 сек** (чуть длиннее)
+
+**Пример успешной передачи в логах:**
+```
+[APRS432] === Frame config ===
+[APRS432] Source: KVAS43-1
+[APRS432] Dest: APRS-0
+[APRS432] Status: 'Flipper APRS cfg'
+[APRS432] Lat: '55.0000N', Lon: '37.0000E'
+[APRS432] Position is valid, encoding position frame
+[APRS432] Position frame size: 61 bytes
+[APRS432] AX25 Position: ... | frame=61 bytes | full_hex=82A0A4A640406096AC82A6...
+[APRS432] TX started: freq=432495178 frame=61 bits=769 full_hex=82A0A4A640406096AC82A6...
+[D][FuriHalSubGhz] Async TX Radio stats: on 30784us, off 48360us, DutyCycle: 39%
+[APRS432] TX complete: packets=6 last_rssi=-138 last_lqi=127
+```
+
+**Интерпретация радио-статистики:**
+- `on 30784us` — передатчик был активен 30.78 миллисекунд
+- `off 48360us` — интервалы между битами
+- `DutyCycle: 39%` — здоровый уровень нагрузки (не перегруж)
+
+**Короткий писк = Успешная передача!** Flipper использует эффективную GFSK модуляцию, поэтому position и status фреймы естественно намного короче чем передачи от других устройств.
+
 **Сохранение логов:**
 
 Логи выводятся в CLI в реальном времени. Для сохранения скопируйте вывод из терминала (Ctrl+A, Ctrl+C) и сохраните в файл для последующего анализа.
@@ -429,9 +469,45 @@ For `APRS-0` (Destination):
 - Bytes 18+: payload (status text or position data)
 - Last 2 bytes: FCS (CRC16 little-endian)
 
-**Saving logs:**
+**How to verify successful transmission:**
 
-Logs appear in CLI in real-time. To save, copy terminal output (Ctrl+A, Ctrl+C) and paste into a file for later analysis.
+Check for these logs in order:
+
+1. `[APRS432] TX started: freq=... frame=... bits=...` — TX initiated
+2. `[D][FuriHalSubGhz] Async TX Radio stats: on X us, off Y us, DutyCycle: Z%` — **CRITICAL**: Radio transmitted for X microseconds
+3. `[APRS432] TX complete: packets=N ...` — Transmission finished, packet counter incremented
+
+**Transmission duration calculation:**
+
+Status frame (42 bytes):
+- ~617 bits in NRZI stream
+- 617 × 104 μs/bit ≈ 64 ms ≈ **0.064 seconds** (short beep)
+
+Position frame (61 bytes):
+- ~769 bits in NRZI stream  
+- 769 × 104 μs/bit ≈ 80 ms ≈ **0.08 seconds** (slightly longer)
+
+**Example successful TX logs:**
+```
+[APRS432] === Frame config ===
+[APRS432] Source: KVAS43-1
+[APRS432] Dest: APRS-0
+[APRS432] Status: 'Flipper APRS cfg'
+[APRS432] Lat: '55.0000N', Lon: '37.0000E'
+[APRS432] Position is valid, encoding position frame
+[APRS432] Position frame size: 61 bytes
+[APRS432] AX25 Position: ... | frame=61 bytes | full_hex=82A0A4A640406096AC82A6...
+[APRS432] TX started: freq=432495178 frame=61 bits=769 full_hex=82A0A4A640406096AC82A6...
+[D][FuriHalSubGhz] Async TX Radio stats: on 30784us, off 48360us, DutyCycle: 39%
+[APRS432] TX complete: packets=6 last_rssi=-138 last_lqi=127
+```
+
+**Radio stats interpretation:**
+- `on 30784us` — transmitter was active for 30.78 ms
+- `off 48360us` — bit-to-bit timing
+- `DutyCycle: 39%` — healthy transmission load (not saturated)
+
+**Short beep = Successful transmission!** The Flipper uses efficient GFSK modulation, so position/status frames are naturally much shorter than longer transmissions from other devices.
 
 ### Debugging
 
