@@ -153,17 +153,32 @@ ufbt launch
 
 **Пример логов при передаче Status frame (полный формат):**
 ```
-[APRS432] === Frame config ===
+[APRS432] === FRAME GENERATION STARTED ===
 [APRS432] Source: KYCALL-1
 [APRS432] Dest: APRS-0
 [APRS432] Path1: WIDE2-2 (use=1)
 [APRS432] Path2: WIDE1-1 (use=0)
 [APRS432] Status: 'Flipper APRS cfg'
 [APRS432] Lat: '00.0000N', Lon: '000.0000E'
-[APRS432] Position invalid, encoding status frame
+[APRS432] Position is INVALID, encoding status frame
 [APRS432] Status frame size: 42 bytes
-[APRS432] AX25 Status: Flipper APRS cfg | frame=42 bytes | full_hex=82A0A4A64040609620F67F029E544C59434B414C20F32D31AC3EEC42
+[APRS432] Building NRZI stream...
+[APRS432] NRZI stream generated: 617 bits total
+[APRS432] First 100 NRZI bits: 010101...
+[APRS432] AX25 Status: Flipper APRS cfg | frame=42 bytes | bits=617 | full_hex=82A0A4A64040609620F67F029E544C59434B414C20F32D31AC3EEC42
+[APRS432] === FRAME GENERATION COMPLETE ===
+[APRS432] === TX START REQUEST ===
+[APRS432] TX Configuration:
+[APRS432]   Frequency: 432495971 Hz
+[APRS432]   Frame size: 42 bytes
+[APRS432]   TX bits ready: 617
+[APRS432]   Bit duration: 833 us
+[APRS432]   Expected TX time: 513 ms
+[APRS432] === TX STARTED ===
 [APRS432] TX started: freq=432495971 frame=42 bits=617 full_hex=82A0A4A64040609620F67F029E544C59434B414C20F32D31AC3EEC42
+[APRS432] TX in progress - packets sent: 7
+[APRS432] === TX COMPLETE ===
+[APRS432] TX finished successfully: bits sent=617 / 617
 [APRS432] TX complete: packets=7 last_rssi=-138 last_lqi=127
 ```
 
@@ -214,41 +229,57 @@ EC 42                       — FCS (CRC) little-endian
 
 Ищи эти логи по порядку:
 
-1. `[APRS432] TX started: freq=... frame=... bits=...` — TX инициирована
-2. `[D][FuriHalSubGhz] Async TX Radio stats: on X us, off Y us, DutyCycle: Z%` — **КЛЮЧЕВОЙ ЛОГ**: Радио передавал X микросекунд
-3. `[APRS432] TX complete: packets=N ...` — Передача завершена, счётчик пакетов увеличился
+1. `[APRS432] === FRAME GENERATION STARTED ===` — начата сборка AX.25/APRS кадра
+2. `[APRS432] NRZI stream generated: ... bits total` — успешно сформирован поток бит
+3. `[APRS432] === TX STARTED ===` — TX реально стартовала
+4. `[D][FuriHalSubGhz] Async TX Radio stats: on X us, off Y us, DutyCycle: Z%` — полезная статистика радио
+5. `[APRS432] TX finished successfully: bits sent=X / X` — все биты ушли полностью
+6. `[APRS432] TX complete: packets=N ...` — Передача завершена, счётчик пакетов увеличился
 
 **Расчет времени передачи:**
 
 Status frame (42 байта):
 - ~617 бит в NRZI потоке
-- 617 × 104 мкс/бит ≈ 64 мс ≈ **0.064 сек** (короткий писк)
+- 617 × 833 мкс/бит ≈ 514 мс ≈ **0.51 сек**
 
 Position frame (61 байт):
 - ~769 бит в NRZI потоке
-- 769 × 104 мкс/бит ≈ 80 мс ≈ **0.08 сек** (чуть длиннее)
+- 769 × 833 мкс/бит ≈ 640 мс ≈ **0.64 сек**
 
 **Пример успешной передачи в логах:**
 ```
-[APRS432] === Frame config ===
+[APRS432] === FRAME GENERATION STARTED ===
 [APRS432] Source: KVAS43-1
 [APRS432] Dest: APRS-0
 [APRS432] Status: 'Flipper APRS cfg'
 [APRS432] Lat: '55.0000N', Lon: '37.0000E'
-[APRS432] Position is valid, encoding position frame
+[APRS432] Position is VALID, encoding position frame
 [APRS432] Position frame size: 61 bytes
-[APRS432] AX25 Position: ... | frame=61 bytes | full_hex=82A0A4A640406096AC82A6...
+[APRS432] Building NRZI stream...
+[APRS432] NRZI stream generated: 769 bits total
+[APRS432] AX25 Position: ... | frame=61 bytes | bits=769 | full_hex=82A0A4A640406096AC82A6...
+[APRS432] === FRAME GENERATION COMPLETE ===
+[APRS432] === TX START REQUEST ===
+[APRS432] TX Configuration:
+[APRS432]   Frequency: 432495178 Hz
+[APRS432]   Frame size: 61 bytes
+[APRS432]   TX bits ready: 769
+[APRS432]   Bit duration: 833 us
+[APRS432]   Expected TX time: 640 ms
+[APRS432] === TX STARTED ===
 [APRS432] TX started: freq=432495178 frame=61 bits=769 full_hex=82A0A4A640406096AC82A6...
 [D][FuriHalSubGhz] Async TX Radio stats: on 30784us, off 48360us, DutyCycle: 39%
+[APRS432] === TX COMPLETE ===
+[APRS432] TX finished successfully: bits sent=769 / 769
 [APRS432] TX complete: packets=6 last_rssi=-138 last_lqi=127
 ```
 
 **Интерпретация радио-статистики:**
-- `on 30784us` — передатчик был активен 30.78 миллисекунд
-- `off 48360us` — интервалы между битами
-- `DutyCycle: 39%` — здоровый уровень нагрузки (не перегруж)
+- `on 30784us` — это статистика активного уровня радио, а не полная длительность APRS пакета
+- `off 48360us` — интервалы между уровнями/переключениями
+- `DutyCycle: 39%` — нормальная нагрузка передатчика
 
-**Короткий писк = Успешная передача!** Flipper использует эффективную GFSK модуляцию, поэтому position и status фреймы естественно намного короче чем передачи от других устройств.
+**Теперь короткий писк уже не считается нормой сам по себе.** После исправления тайминга до `833 us` APRS пакет должен звучать заметно длиннее и непрерывнее, чем при ошибочных `104 us`.
 
 **Сохранение логов:**
 
@@ -412,17 +443,32 @@ ufbt launch
 
 **Example logs for Status frame transmission (full format):**
 ```
-[APRS432] === Frame config ===
+[APRS432] === FRAME GENERATION STARTED ===
 [APRS432] Source: KYCALL-1
 [APRS432] Dest: APRS-0
 [APRS432] Path1: WIDE2-2 (use=1)
 [APRS432] Path2: WIDE1-1 (use=0)
 [APRS432] Status: 'Flipper APRS cfg'
 [APRS432] Lat: '00.0000N', Lon: '000.0000E'
-[APRS432] Position invalid, encoding status frame
+[APRS432] Position is INVALID, encoding status frame
 [APRS432] Status frame size: 42 bytes
-[APRS432] AX25 Status: Flipper APRS cfg | frame=42 bytes | full_hex=82A0A4A64040609620F67F029E544C59434B414C20F32D31AC3EEC42
+[APRS432] Building NRZI stream...
+[APRS432] NRZI stream generated: 617 bits total
+[APRS432] First 100 NRZI bits: 010101...
+[APRS432] AX25 Status: Flipper APRS cfg | frame=42 bytes | bits=617 | full_hex=82A0A4A64040609620F67F029E544C59434B414C20F32D31AC3EEC42
+[APRS432] === FRAME GENERATION COMPLETE ===
+[APRS432] === TX START REQUEST ===
+[APRS432] TX Configuration:
+[APRS432]   Frequency: 432495971 Hz
+[APRS432]   Frame size: 42 bytes
+[APRS432]   TX bits ready: 617
+[APRS432]   Bit duration: 833 us
+[APRS432]   Expected TX time: 513 ms
+[APRS432] === TX STARTED ===
 [APRS432] TX started: freq=432495971 frame=42 bits=617 full_hex=82A0A4A64040609620F67F029E544C59434B414C20F32D31AC3EEC42
+[APRS432] TX in progress - packets sent: 7
+[APRS432] === TX COMPLETE ===
+[APRS432] TX finished successfully: bits sent=617 / 617
 [APRS432] TX complete: packets=7 last_rssi=-138 last_lqi=127
 ```
 
@@ -473,41 +519,57 @@ For `APRS-0` (Destination):
 
 Check for these logs in order:
 
-1. `[APRS432] TX started: freq=... frame=... bits=...` — TX initiated
-2. `[D][FuriHalSubGhz] Async TX Radio stats: on X us, off Y us, DutyCycle: Z%` — **CRITICAL**: Radio transmitted for X microseconds
-3. `[APRS432] TX complete: packets=N ...` — Transmission finished, packet counter incremented
+1. `[APRS432] === FRAME GENERATION STARTED ===` — AX.25/APRS frame build started
+2. `[APRS432] NRZI stream generated: ... bits total` — bitstream generated successfully
+3. `[APRS432] === TX STARTED ===` — TX actually started
+4. `[D][FuriHalSubGhz] Async TX Radio stats: on X us, off Y us, DutyCycle: Z%` — useful radio statistics
+5. `[APRS432] TX finished successfully: bits sent=X / X` — all bits were transmitted
+6. `[APRS432] TX complete: packets=N ...` — transmission finished, packet counter incremented
 
 **Transmission duration calculation:**
 
 Status frame (42 bytes):
 - ~617 bits in NRZI stream
-- 617 × 104 μs/bit ≈ 64 ms ≈ **0.064 seconds** (short beep)
+- 617 × 833 μs/bit ≈ 514 ms ≈ **0.51 seconds**
 
 Position frame (61 bytes):
 - ~769 bits in NRZI stream  
-- 769 × 104 μs/bit ≈ 80 ms ≈ **0.08 seconds** (slightly longer)
+- 769 × 833 μs/bit ≈ 640 ms ≈ **0.64 seconds**
 
 **Example successful TX logs:**
 ```
-[APRS432] === Frame config ===
+[APRS432] === FRAME GENERATION STARTED ===
 [APRS432] Source: KVAS43-1
 [APRS432] Dest: APRS-0
 [APRS432] Status: 'Flipper APRS cfg'
 [APRS432] Lat: '55.0000N', Lon: '37.0000E'
-[APRS432] Position is valid, encoding position frame
+[APRS432] Position is VALID, encoding position frame
 [APRS432] Position frame size: 61 bytes
-[APRS432] AX25 Position: ... | frame=61 bytes | full_hex=82A0A4A640406096AC82A6...
+[APRS432] Building NRZI stream...
+[APRS432] NRZI stream generated: 769 bits total
+[APRS432] AX25 Position: ... | frame=61 bytes | bits=769 | full_hex=82A0A4A640406096AC82A6...
+[APRS432] === FRAME GENERATION COMPLETE ===
+[APRS432] === TX START REQUEST ===
+[APRS432] TX Configuration:
+[APRS432]   Frequency: 432495178 Hz
+[APRS432]   Frame size: 61 bytes
+[APRS432]   TX bits ready: 769
+[APRS432]   Bit duration: 833 us
+[APRS432]   Expected TX time: 640 ms
+[APRS432] === TX STARTED ===
 [APRS432] TX started: freq=432495178 frame=61 bits=769 full_hex=82A0A4A640406096AC82A6...
 [D][FuriHalSubGhz] Async TX Radio stats: on 30784us, off 48360us, DutyCycle: 39%
+[APRS432] === TX COMPLETE ===
+[APRS432] TX finished successfully: bits sent=769 / 769
 [APRS432] TX complete: packets=6 last_rssi=-138 last_lqi=127
 ```
 
 **Radio stats interpretation:**
-- `on 30784us` — transmitter was active for 30.78 ms
-- `off 48360us` — bit-to-bit timing
+- `on 30784us` — this is active radio time statistics, not the full APRS packet duration
+- `off 48360us` — timing between level changes
 - `DutyCycle: 39%` — healthy transmission load (not saturated)
 
-**Short beep = Successful transmission!** The Flipper uses efficient GFSK modulation, so position/status frames are naturally much shorter than longer transmissions from other devices.
+**A very short beep is no longer considered normal by itself.** After fixing timing to `833 us`, the APRS packet should sound noticeably longer and more continuous than with the incorrect `104 us`.
 
 ### Debugging
 

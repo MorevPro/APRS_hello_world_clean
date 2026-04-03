@@ -41,7 +41,7 @@ choco install direwolf
 
 ### Создание конфига `direwolf.conf`:
 
-Используйте файл `debug/direwolf.conf` в текущей директории или вынесите отдельно (например, `C:\direwolf\`):
+Используйте файл `md/direwolf.conf` в текущей директории или вынесите отдельно (например, `C:\direwolf\`):
 
 ```ini
 # ============================================================
@@ -82,7 +82,7 @@ SLEW 20
 
 ```powershell
 # С подробной информацией о декодировании (-t 1) с графикой
-direwolf -c direwolf.conf -t 1
+direwolf -c md/direwolf.conf -t 1
 
 # Или только текстовый формат (без графики)
 direwolf -c direwolf.conf -t 0
@@ -235,6 +235,7 @@ Settings > System > Sound > Volume and device preferences > App volume and devic
 ```powershell
 # Посмотрите в выводе Direwolf при запуске:
 direwolf -c direwolf.conf -t 1
+direwolf -c C:\direwolf\direwolf.conf -t 1
 ```
 
 Должна быть строка:

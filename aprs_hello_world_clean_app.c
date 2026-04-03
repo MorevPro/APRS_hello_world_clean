@@ -15,13 +15,64 @@
 
 #define TAG "APRS432"
 #define APRS_FREQUENCY_HZ          432500000UL
-#define APRS_GFSK_BIT_DURATION_US  104U
-#define APRS_PREAMBLE_FLAGS        32U
+#define APRS_AFSK_TONE_MARK_HZ     1200U
+#define APRS_AFSK_TONE_SPACE_HZ    2400U
+#define APRS_AFSK_MARK_HALF_US     (1000000UL / (APRS_AFSK_TONE_MARK_HZ * 2UL))
+#define APRS_AFSK_SPACE_HALF_US    (1000000UL / (APRS_AFSK_TONE_SPACE_HZ * 2UL))
+#define APRS_AFSK_BIT_DURATION_US  833U
+#define APRS_PREAMBLE_FLAGS        100U
 #define APRS_POSTAMBLE_FLAGS       3U
 #define APP_TICK_PERIOD_MS         200U
 
 // Forward declarations
 static void aprs_set_status(APRSHelloWorldCleanApp* app, const char* text);
+
+static bool aprs_waveform_emit_level(
+    APRSHelloWorldCleanApp* app,
+    bool level,
+    uint32_t duration_us) {
+    if(app->tx_waveform_count >= APRS_HELLO_WORLD_TX_WAVEFORM_CAPACITY) {
+        return false;
+    }
+
+    app->tx_waveform[app->tx_waveform_count++] = level_duration_make(level, duration_us);
+    app->tx_waveform_duration_us += duration_us;
+    return true;
+}
+
+static bool aprs_waveform_emit_tone(APRSHelloWorldCleanApp* app, bool mark_tone) {
+    const uint32_t half_period_us = mark_tone ? APRS_AFSK_MARK_HALF_US : APRS_AFSK_SPACE_HALF_US;
+    const uint8_t half_cycles = mark_tone ? 2U : 4U;
+
+    for(uint8_t i = 0; i < half_cycles; i++) {
+        app->last_edge_level = !app->last_edge_level;
+        if(!aprs_waveform_emit_level(app, app->last_edge_level, half_period_us)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool aprs_build_afsk_waveform(APRSHelloWorldCleanApp* app) {
+    if(!app) {
+        return false;
+    }
+
+    app->tx_waveform_count = 0U;
+    app->tx_waveform_index = 0U;
+    app->tx_waveform_duration_us = 0U;
+    app->last_edge_level = false;
+
+    for(size_t i = 0; i < app->tx_level_count; i++) {
+        const bool mark_tone = app->tx_levels[i];
+        if(!aprs_waveform_emit_tone(app, mark_tone)) {
+            return false;
+        }
+    }
+
+    return app->tx_waveform_count > 0U;
+}
 
 static const NotificationSequence sequence_tx_start = {
     &message_red_255,
@@ -260,8 +311,8 @@ static bool aprs_radio_start_rx(APRSHelloWorldCleanApp* app) {
     }
 
     furi_hal_subghz_idle();
-    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_gfsk_9_99kb_async_regs);
-    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(app->frequency_hz);
+    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs);
+    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(APRS_FREQUENCY_HZ);
     furi_hal_subghz_start_async_rx(aprs_radio_capture_callback, app);
     furi_hal_subghz_rx();
     app->rx_running = true;
@@ -274,61 +325,90 @@ static bool aprs_radio_start_rx(APRSHelloWorldCleanApp* app) {
 static LevelDuration aprs_radio_tx_callback(void* context) {
     APRSHelloWorldCleanApp* app = context;
 
-    if(app->tx_level_index >= app->tx_level_count) {
+    if(app->tx_waveform_index >= app->tx_waveform_count) {
         return level_duration_reset();
     }
 
-    const bool level = app->tx_levels[app->tx_level_index++];
-    return level_duration_make(level, APRS_GFSK_BIT_DURATION_US);
+    return app->tx_waveform[app->tx_waveform_index++];
 }
 
 static bool aprs_refresh_frame(APRSHelloWorldCleanApp* app) {
     aprs_sync_address_config(app);
 
-    // Log current configuration
-    FURI_LOG_I(TAG, "=== Frame config ===");
-    FURI_LOG_I(TAG, "Source: %s-%u", app->address_config.source_call, app->address_config.source_ssid);
-    FURI_LOG_I(TAG, "Dest: %s-%u", app->address_config.destination_call, app->address_config.destination_ssid);
-    FURI_LOG_I(TAG, "Path1: %s-%u (use=%d)", app->address_config.path1_call, app->address_config.path1_ssid, app->address_config.use_path1);
-    FURI_LOG_I(TAG, "Path2: %s-%u (use=%d)", app->address_config.path2_call, app->address_config.path2_ssid, app->address_config.use_path2);
-    FURI_LOG_I(TAG, "Status: '%s'", app->address_config.status_text ? app->address_config.status_text : "(null)");
-    FURI_LOG_I(TAG, "Lat: '%s', Lon: '%s'", app->address_config.position_lat, app->address_config.position_lon);
+    FURI_LOG_I(TAG, "=== FRAME GENERATION STARTED ===");
+    FURI_LOG_I(
+        TAG,
+        "Source: %s-%u",
+        app->address_config.source_call,
+        app->address_config.source_ssid);
+    FURI_LOG_I(
+        TAG,
+        "Dest: %s-%u",
+        app->address_config.destination_call,
+        app->address_config.destination_ssid);
+    FURI_LOG_I(
+        TAG,
+        "Path1: %s-%u (use=%d)",
+        app->address_config.path1_call,
+        app->address_config.path1_ssid,
+        app->address_config.use_path1);
+    FURI_LOG_I(
+        TAG,
+        "Path2: %s-%u (use=%d)",
+        app->address_config.path2_call,
+        app->address_config.path2_ssid,
+        app->address_config.use_path2);
+    FURI_LOG_I(
+        TAG,
+        "Status: '%s'",
+        app->address_config.status_text ? app->address_config.status_text : "(null)");
+    FURI_LOG_I(
+        TAG,
+        "Lat: '%s', Lon: '%s'",
+        app->address_config.position_lat,
+        app->address_config.position_lon);
 
-    // Try to encode position frame if coordinates are valid
     if(aprs_ax25_position_is_valid(&app->address_config)) {
-        FURI_LOG_I(TAG, "Position is valid, encoding position frame");
+        FURI_LOG_I(TAG, "Position is VALID, encoding position frame");
         app->frame_size = aprs_ax25_encode_position_frame(
             &app->address_config, app->frame_buffer, sizeof(app->frame_buffer));
-        
+
         if(app->frame_size > 0) {
             snprintf(app->status_text, sizeof(app->status_text), "Position");
             FURI_LOG_I(TAG, "Position frame size: %u bytes", (unsigned int)app->frame_size);
         } else {
             aprs_set_status(app, "Position frame too large");
-            FURI_LOG_E(TAG, "Position frame encoding failed");
+            FURI_LOG_E(TAG, "Position frame encoding FAILED - size = 0");
             return false;
         }
     } else {
-        FURI_LOG_I(TAG, "Position invalid, encoding status frame");
-        // Fall back to status frame
+        FURI_LOG_I(TAG, "Position is INVALID, encoding status frame");
         app->frame_size = aprs_ax25_encode_status_frame(
             &app->address_config, app->frame_buffer, sizeof(app->frame_buffer));
-        
+
         if(app->frame_size == 0U) {
             aprs_set_status(app, "Status frame failed");
-            FURI_LOG_E(TAG, "Status frame encoding failed");
+            FURI_LOG_E(TAG, "Status frame encoding FAILED");
             return false;
         }
-        
+
         FURI_LOG_I(TAG, "Status frame size: %u bytes", (unsigned int)app->frame_size);
         snprintf(app->status_text, sizeof(app->status_text), "Status");
     }
 
-    // Check frame size against AX.25 standard maximum (255 bytes)
     if(app->frame_size > 255U) {
         aprs_set_status(app, "Frame too large (>255)");
+        FURI_LOG_E(
+            TAG,
+            "Frame size exceeds AX.25 maximum: %u > 255",
+            (unsigned int)app->frame_size);
         return false;
     }
+
+    FURI_LOG_I(TAG, "Building NRZI stream...");
+    FURI_LOG_I(TAG, "  Preamble flags: %u", APRS_PREAMBLE_FLAGS);
+    FURI_LOG_I(TAG, "  Postamble flags: %u", APRS_POSTAMBLE_FLAGS);
+    FURI_LOG_I(TAG, "  TX level capacity: %u", APRS_HELLO_WORLD_TX_LEVEL_CAPACITY);
 
     if(!aprs_ax25_build_nrzi_stream(
            app->frame_buffer,
@@ -340,20 +420,63 @@ static bool aprs_refresh_frame(APRSHelloWorldCleanApp* app) {
            &app->tx_level_count)) {
         app->tx_level_count = 0U;
         aprs_set_status(app, "NRZI stream failed");
+        FURI_LOG_E(TAG, "NRZI encoding FAILED");
         return false;
     }
 
     app->tx_bit_count = (uint32_t)app->tx_level_count;
+    FURI_LOG_I(TAG, "NRZI stream generated: %lu bits total", (unsigned long)app->tx_bit_count);
+    FURI_LOG_I(TAG, "  Expected preamble bits: %u", APRS_PREAMBLE_FLAGS * 8U);
+    FURI_LOG_I(TAG, "  Expected frame bits: ~%u", (unsigned int)(app->frame_size * 8U));
+    FURI_LOG_I(TAG, "  Expected postamble bits: %u", APRS_POSTAMBLE_FLAGS * 8U);
+    FURI_LOG_I(
+        TAG,
+        "  Total expected: ~%lu bits",
+        (unsigned long)(APRS_PREAMBLE_FLAGS * 8U + app->frame_size * 8U + APRS_POSTAMBLE_FLAGS * 8U));
+
+    if(app->tx_level_count > 0U) {
+        char bits_buffer[101] = {0};
+        size_t bits_to_log = (app->tx_level_count < 100U) ? app->tx_level_count : 100U;
+        for(size_t i = 0; i < bits_to_log; i++) {
+            bits_buffer[i] = app->tx_levels[i] ? '1' : '0';
+        }
+        bits_buffer[bits_to_log] = '\0';
+        FURI_LOG_I(TAG, "First 100 NRZI bits: %s", bits_buffer);
+        FURI_LOG_I(
+            TAG,
+            "AFSK half periods: mark=%lu us space=%lu us",
+            (unsigned long)APRS_AFSK_MARK_HALF_US,
+            (unsigned long)APRS_AFSK_SPACE_HALF_US);
+    }
+
+    if(!aprs_build_afsk_waveform(app)) {
+        app->tx_waveform_count = 0U;
+        app->tx_waveform_index = 0U;
+        app->tx_waveform_duration_us = 0U;
+        aprs_set_status(app, "AFSK waveform failed");
+        FURI_LOG_E(TAG, "AFSK waveform generation FAILED");
+        return false;
+    }
+
+    FURI_LOG_I(
+        TAG,
+        "AFSK waveform generated: segments=%lu duration=%lu us (~%lu ms)",
+        (unsigned long)app->tx_waveform_count,
+        (unsigned long)app->tx_waveform_duration_us,
+        (unsigned long)(app->tx_waveform_duration_us / 1000U));
+
     aprs_hex_full_dump(
         app->frame_buffer, app->frame_size, app->last_tx_hex, sizeof(app->last_tx_hex));
 
     FURI_LOG_I(
         TAG,
-        "AX25 %s: %s | frame=%u bytes | full_hex=%s",
+        "AX25 %s: %s | frame=%u bytes | bits=%lu | full_hex=%s",
         app->status_text,
         app->address_config.status_text ? app->address_config.status_text : "(empty)",
         (unsigned int)app->frame_size,
+        (unsigned long)app->tx_bit_count,
         app->last_tx_hex);
+    FURI_LOG_I(TAG, "=== FRAME GENERATION COMPLETE ===");
 
     aprs_set_status(app, "frame ready");
     return true;
@@ -393,9 +516,26 @@ static bool aprs_radio_start_tx(APRSHelloWorldCleanApp* app) {
 
     furi_hal_subghz_idle();
     furi_hal_subghz_reset();
-    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_gfsk_9_99kb_async_regs);
-    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(app->frequency_hz);
+    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs);
+    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(APRS_FREQUENCY_HZ);
     app->tx_allowed_in_region = furi_hal_region_is_frequency_allowed(app->frequency_hz);
+
+    FURI_LOG_I(TAG, "=== TX START REQUEST ===");
+    FURI_LOG_I(TAG, "TX Configuration:");
+    FURI_LOG_I(TAG, "  Frequency: %lu Hz", (unsigned long)app->frequency_hz);
+    FURI_LOG_I(TAG, "  Frame size: %u bytes", (unsigned int)app->frame_size);
+    FURI_LOG_I(TAG, "  TX bits ready: %lu", (unsigned long)app->tx_bit_count);
+    FURI_LOG_I(TAG, "  Waveform segments: %lu", (unsigned long)app->tx_waveform_count);
+    FURI_LOG_I(TAG, "  TX waveform capacity: %u", APRS_HELLO_WORLD_TX_WAVEFORM_CAPACITY);
+    FURI_LOG_I(
+        TAG,
+        "  AFSK half-periods: mark=%lu us space=%lu us",
+        (unsigned long)APRS_AFSK_MARK_HALF_US,
+        (unsigned long)APRS_AFSK_SPACE_HALF_US);
+    FURI_LOG_I(
+        TAG,
+        "  Expected TX time: ~%lu ms",
+        (unsigned long)(app->tx_waveform_duration_us / 1000U));
 
     if(!app->tx_allowed_in_region || !furi_hal_subghz_tx()) {
         app->tx_last_start_ok = false;
@@ -412,12 +552,15 @@ static bool aprs_radio_start_tx(APRSHelloWorldCleanApp* app) {
 
     furi_hal_power_suppress_charge_enter();
     app->tx_level_index = 0U;
+    app->tx_waveform_index = 0U;
+    app->last_edge_level = false;
     app->tx_last_start_ok = furi_hal_subghz_start_async_tx(aprs_radio_tx_callback, app);
 
     if(!app->tx_last_start_ok) {
         furi_hal_power_suppress_charge_exit();
         aprs_set_status(app, "TX start failed");
-        FURI_LOG_E(TAG, "TX start failed at %lu Hz", (unsigned long)app->frequency_hz);
+        FURI_LOG_E(TAG, "furi_hal_subghz_start_async_tx() FAILED!");
+        FURI_LOG_E(TAG, "  Radio may not be properly initialized");
         notification_message(app->notifications, &sequence_tx_error);
         aprs_radio_start_rx(app);
         return false;
@@ -427,6 +570,7 @@ static bool aprs_radio_start_tx(APRSHelloWorldCleanApp* app) {
     app->tx_running = true;
     app->tx_packets++;
     aprs_set_status(app, "TX in progress");
+    FURI_LOG_I(TAG, "=== TX STARTED ===");
     FURI_LOG_I(
         TAG,
         "TX started: freq=%lu frame=%u bits=%lu full_hex=%s",
@@ -434,6 +578,7 @@ static bool aprs_radio_start_tx(APRSHelloWorldCleanApp* app) {
         (unsigned int)app->frame_size,
         (unsigned long)app->tx_bit_count,
         app->last_tx_hex);
+    FURI_LOG_I(TAG, "TX in progress - packets sent: %lu", (unsigned long)app->tx_packets);
     return true;
 }
 
@@ -446,6 +591,21 @@ static void aprs_radio_poll(APRSHelloWorldCleanApp* app) {
     app->last_lqi = furi_hal_subghz_get_lqi();
 
     if(app->tx_running && furi_hal_subghz_is_async_tx_complete()) {
+        FURI_LOG_I(TAG, "=== TX COMPLETE ===");
+        FURI_LOG_I(
+            TAG,
+            "TX finished successfully: waveform sent=%lu / %lu, bits=%lu",
+            (unsigned long)app->tx_waveform_index,
+            (unsigned long)app->tx_waveform_count,
+            (unsigned long)app->tx_bit_count);
+
+        if(app->tx_waveform_index < app->tx_waveform_count) {
+            FURI_LOG_W(
+                TAG,
+                "TX incomplete: missing waveform segments=%lu",
+                (unsigned long)(app->tx_waveform_count - app->tx_waveform_index));
+        }
+
         furi_hal_subghz_stop_async_tx();
         furi_hal_power_suppress_charge_exit();
         furi_hal_subghz_idle();
@@ -475,7 +635,7 @@ static bool aprs_radio_init(APRSHelloWorldCleanApp* app) {
 
     furi_hal_subghz_reset();
     app->radio_ready = true;
-    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(app->frequency_hz);
+    app->frequency_hz = furi_hal_subghz_set_frequency_and_path(APRS_FREQUENCY_HZ);
     aprs_set_status(app, app->tx_allowed_in_region ? "RX ready, TX allowed" :
                                                   "RX ready, TX restricted");
     FURI_LOG_I(

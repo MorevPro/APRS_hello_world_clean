@@ -6,12 +6,14 @@
 #include <furi.h>
 #include <gui/gui.h>
 #include <input/input.h>
+#include <lib/toolbox/level_duration.h>
 #include <notification/notification.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 #define APRS_HELLO_WORLD_FRAME_BUFFER_SIZE 256U
 #define APRS_HELLO_WORLD_TX_LEVEL_CAPACITY 2048U
+#define APRS_HELLO_WORLD_TX_WAVEFORM_CAPACITY 6144U
 
 #define APRS_CFG_CALL_LEN        7U
 #define APRS_CFG_STATUS_MAX      62U
@@ -112,16 +114,20 @@ typedef struct APRSHelloWorldCleanApp {
 
     uint32_t tx_packets;
     uint32_t tx_bit_count;
+    uint32_t tx_waveform_duration_us;
 
     size_t frame_size;
     size_t tx_level_count;
     size_t tx_level_index;
+    size_t tx_waveform_count;
+    size_t tx_waveform_index;
 
     uint8_t frame_buffer[APRS_HELLO_WORLD_FRAME_BUFFER_SIZE];
     bool tx_levels[APRS_HELLO_WORLD_TX_LEVEL_CAPACITY];
+    LevelDuration tx_waveform[APRS_HELLO_WORLD_TX_WAVEFORM_CAPACITY];
 
     char status_text[96];
-    char last_tx_hex[96];
+    char last_tx_hex[512];
     char last_status[48];
     char region_name[8];
 } APRSHelloWorldCleanApp;

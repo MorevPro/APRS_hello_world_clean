@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define APRS_AX25_CONTROL_UI  0x03U
@@ -46,31 +47,146 @@ static size_t aprs_ax25_write_address(
     return APRS_AX25_ADDRESS_LEN;
 }
 
-bool aprs_ax25_position_is_valid(const AprsAx25AddressConfig* config) {
+static bool aprs_ax25_is_aprs_lat(const char* lat) {
+    if(!lat || strlen(lat) != 8U) {
+        return false;
+    }
+
+    return isdigit((unsigned char)lat[0]) && isdigit((unsigned char)lat[1]) &&
+           isdigit((unsigned char)lat[2]) && isdigit((unsigned char)lat[3]) &&
+           lat[4] == '.' && isdigit((unsigned char)lat[5]) &&
+           isdigit((unsigned char)lat[6]) && (lat[7] == 'N' || lat[7] == 'S');
+}
+
+static bool aprs_ax25_is_aprs_lon(const char* lon) {
+    if(!lon || strlen(lon) != 9U) {
+        return false;
+    }
+
+    return isdigit((unsigned char)lon[0]) && isdigit((unsigned char)lon[1]) &&
+           isdigit((unsigned char)lon[2]) && isdigit((unsigned char)lon[3]) &&
+           isdigit((unsigned char)lon[4]) && lon[5] == '.' &&
+           isdigit((unsigned char)lon[6]) && isdigit((unsigned char)lon[7]) &&
+           (lon[8] == 'E' || lon[8] == 'W');
+}
+
+static bool aprs_ax25_parse_decimal_coordinate(
+    const char* text,
+    bool is_latitude,
+    char* out,
+    size_t out_size) {
+    if(!text || !out || out_size == 0U) {
+        return false;
+    }
+
+    while(*text == ' ') {
+        text++;
+    }
+
+    size_t len = strlen(text);
+    if(len < 2U) {
+        return false;
+    }
+
+    char hemi = text[len - 1U];
+    bool hemi_ok = is_latitude ? (hemi == 'N' || hemi == 'S') : (hemi == 'E' || hemi == 'W');
+    if(!hemi_ok) {
+        return false;
+    }
+
+    char numeric[24] = {0};
+    size_t numeric_len = len - 1U;
+    if(numeric_len >= sizeof(numeric)) {
+        return false;
+    }
+
+    memcpy(numeric, text, numeric_len);
+    numeric[numeric_len] = '\0';
+
+    char* end = NULL;
+    float degrees_value = strtof(numeric, &end);
+    if(end == numeric || *end != '\0') {
+        return false;
+    }
+
+    if(degrees_value < 0.0f) {
+        degrees_value = -degrees_value;
+    }
+
+    float max_value = is_latitude ? 90.0f : 180.0f;
+    if(degrees_value >= max_value) {
+        return false;
+    }
+
+    uint16_t degrees = (uint16_t)degrees_value;
+    float minutes_full = (degrees_value - (float)degrees) * 60.0f;
+    uint16_t minutes = (uint16_t)minutes_full;
+    uint16_t hundredths = (uint16_t)(((minutes_full - (float)minutes) * 100.0f) + 0.5f);
+
+    if(hundredths >= 100U) {
+        hundredths = 0U;
+        minutes++;
+    }
+
+    if(minutes >= 60U) {
+        minutes = 0U;
+        degrees++;
+    }
+
+    int written = 0;
+    if(is_latitude) {
+        written = snprintf(out, out_size, "%02u%02u.%02u%c", degrees, minutes, hundredths, hemi);
+    } else {
+        written = snprintf(out, out_size, "%03u%02u.%02u%c", degrees, minutes, hundredths, hemi);
+    }
+
+    return written > 0 && (size_t)written < out_size;
+}
+
+static bool aprs_ax25_format_position(
+    const AprsAx25AddressConfig* config,
+    char* lat_out,
+    size_t lat_out_size,
+    char* lon_out,
+    size_t lon_out_size) {
     if(!config || !config->position_lat || !config->position_lon) {
         return false;
     }
 
-    // Check if position is not all zeros/default
     const char* lat = config->position_lat;
     const char* lon = config->position_lon;
 
-    // Reject default/zero coordinates (00.0000N and 000.0000E)
+    while(*lat == ' ') {
+        lat++;
+    }
+    while(*lon == ' ') {
+        lon++;
+    }
+
     if(strcmp(lat, "00.0000N") == 0 && strcmp(lon, "000.0000E") == 0) {
-        return false;  // Default coordinates, not valid for transmission
+        return false;
     }
 
-    // Simple validation: check length and presence of direction indicators (N/S, E/W)
-    if(strlen(lat) > 0 && strlen(lon) > 0) {
-        char lat_dir = lat[strlen(lat) - 1];
-        char lon_dir = lon[strlen(lon) - 1];
-
-        if((lat_dir == 'N' || lat_dir == 'S') && (lon_dir == 'E' || lon_dir == 'W')) {
-            return true;
+    if(aprs_ax25_is_aprs_lat(lat) && aprs_ax25_is_aprs_lon(lon)) {
+        if(snprintf(lat_out, lat_out_size, "%s", lat) <= 0) {
+            return false;
         }
+        if(snprintf(lon_out, lon_out_size, "%s", lon) <= 0) {
+            return false;
+        }
+        return true;
     }
 
-    return false;
+    return aprs_ax25_parse_decimal_coordinate(lat, true, lat_out, lat_out_size) &&
+           aprs_ax25_parse_decimal_coordinate(lon, false, lon_out, lon_out_size);
+}
+
+bool aprs_ax25_position_is_valid(const AprsAx25AddressConfig* config) {
+    char aprs_lat[9] = {0};
+    char aprs_lon[10] = {0};
+
+    return aprs_ax25_format_position(
+        config, aprs_lat, sizeof(aprs_lat), aprs_lon, sizeof(aprs_lon));
 }
 
 size_t aprs_ax25_encode_status_frame(
@@ -171,21 +287,22 @@ size_t aprs_ax25_encode_position_frame(
         return 0;
     }
 
-    if(!aprs_ax25_position_is_valid(config)) {
+    char aprs_lat[9] = {0};
+    char aprs_lon[10] = {0};
+
+    if(!aprs_ax25_format_position(config, aprs_lat, sizeof(aprs_lat), aprs_lon, sizeof(aprs_lon))) {
         return 0;
     }
 
-    // Build position info: !DDMM.hhN/DDDMM.hhE[/BRG/SPD]status
-    // For now, simplified: !lat/lon/status
     char position_info[128] = {0};
     const char* status = config->status_text ? config->status_text : "";
 
     int pos_len = snprintf(
         position_info,
         sizeof(position_info),
-        "!%s/%s/%s",
-        config->position_lat,
-        config->position_lon,
+        "!%s/%s-%s",
+        aprs_lat,
+        aprs_lon,
         status);
 
     if(pos_len <= 0 || pos_len >= (int)sizeof(position_info)) {
